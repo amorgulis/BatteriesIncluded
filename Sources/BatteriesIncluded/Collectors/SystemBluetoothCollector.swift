@@ -163,7 +163,10 @@ actor SystemBluetoothCollector: BatteryCollecting {
 
             let percentages = Self.percentages(in: properties)
             guard !percentages.isEmpty else { continue }
-            valuesByAddress[address] = percentages
+            valuesByAddress[address] = Self.mergeRegistryPercentageMaps([
+                valuesByAddress[address] ?? [:],
+                percentages
+            ])
         }
 
         return valuesByAddress
@@ -190,6 +193,23 @@ actor SystemBluetoothCollector: BatteryCollecting {
             }
         }
         return nil
+    }
+
+    nonisolated static func mergeRegistryPercentageMaps(
+        _ percentageMaps: [[BatteryComponent: Int?]]
+    ) -> [BatteryComponent: Int?] {
+        var merged: [BatteryComponent: Int?] = [:]
+
+        for percentages in percentageMaps {
+            for (component, percentage) in percentages {
+                guard merged[component] == nil,
+                      let percentage,
+                      (0...100).contains(percentage) else { continue }
+                merged[component] = percentage
+            }
+        }
+
+        return merged
     }
 
     private static func percentages(in properties: [String: Any]) -> [BatteryComponent: Int?] {

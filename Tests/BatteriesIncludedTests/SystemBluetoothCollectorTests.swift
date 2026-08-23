@@ -47,4 +47,26 @@ final class SystemBluetoothCollectorTests: XCTestCase {
             "AA:BB:01:02:0C:0D"
         )
     }
+
+    func testRegistryReducerMergesDisjointComponentMaps() {
+        let result = SystemBluetoothCollector.mergeRegistryPercentageMaps([
+            [.left: 81],
+            [.right: 79, .case: 55]
+        ])
+
+        XCTAssertEqual(result[.left]!, 81)
+        XCTAssertEqual(result[.right]!, 79)
+        XCTAssertEqual(result[.case]!, 55)
+    }
+
+    func testRegistryReducerKeepsFirstValidComponentValue() {
+        let result = SystemBluetoothCollector.mergeRegistryPercentageMaps([
+            [.left: 81, .right: 101, .case: nil],
+            [.left: 72, .right: 79, .case: 55]
+        ])
+
+        XCTAssertEqual(result[.left]!, 81)
+        XCTAssertEqual(result[.right]!, 79)
+        XCTAssertEqual(result[.case]!, 55)
+    }
 }

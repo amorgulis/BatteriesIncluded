@@ -1,0 +1,5 @@
+#!/bin/zsh
+set -euo pipefail
+
+: "${BUILD_APP_CODESIGN_LOG:?BUILD_APP_CODESIGN_LOG must identify the invocation log}"
+print -r -- "${(j:|:)@}" >> "$BUILD_APP_CODESIGN_LOG"

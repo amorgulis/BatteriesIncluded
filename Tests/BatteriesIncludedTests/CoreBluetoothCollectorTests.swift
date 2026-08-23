@@ -298,6 +298,146 @@ final class CoreBluetoothCollectorTests: XCTestCase {
         XCTAssertEqual(bridge.cancelCount(for: requestID), 1)
     }
 
+    func testFreshCacheEmitsOriginalObservationTimestamp() async {
+        let observedAt = Date(timeIntervalSince1970: 1_000)
+        let clock = TestDateClock(observedAt)
+        let state = CoreBluetoothCollectionState(
+            timeoutNanoseconds: 60_000_000_000,
+            now: { clock.current }
+        )
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let device = reading(identifier: UUID(), level: nil)
+
+        let initialCollection = Task { await state.collect(using: bridge) }
+        let initialRequestID = await requests.next()!
+        await state.resolve(
+            requestID: initialRequestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+        await state.record(
+            reading(identifier: device.identifier, level: 64),
+            for: [initialRequestID],
+            generation: 0
+        )
+        _ = await initialCollection.value
+
+        clock.advance(by: 60)
+        let cachedCollection = Task { await state.collect(using: bridge) }
+        let cachedRequestID = await requests.next()!
+        await state.resolve(
+            requestID: cachedRequestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+        let cachedSnapshot = await cachedCollection.value
+
+        XCTAssertEqual(cachedSnapshot.observations.single?.percentage, 64)
+        XCTAssertEqual(cachedSnapshot.observations.single?.observedAt, observedAt)
+    }
+
+    func testCacheOlderThanSixtySecondsDoesNotShortCircuitFailedRefresh() async {
+        let clock = TestDateClock(Date(timeIntervalSince1970: 1_000))
+        let state = CoreBluetoothCollectionState(
+            timeoutNanoseconds: 60_000_000_000,
+            now: { clock.current }
+        )
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let device = reading(identifier: UUID(), level: nil)
+
+        let initialCollection = Task { await state.collect(using: bridge) }
+        let initialRequestID = await requests.next()!
+        await state.resolve(
+            requestID: initialRequestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+        await state.record(
+            reading(identifier: device.identifier, level: 64),
+            for: [initialRequestID],
+            generation: 0
+        )
+        _ = await initialCollection.value
+
+        clock.advance(by: 61)
+        let refresh = Task { await state.collect(using: bridge) }
+        let refreshRequestID = await requests.next()!
+        await state.resolve(
+            requestID: refreshRequestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+        await state.record(
+            reading(identifier: device.identifier, level: nil),
+            for: [refreshRequestID],
+            generation: 0
+        )
+        let refreshedSnapshot = await refresh.value
+
+        XCTAssertNil(refreshedSnapshot.observations.single?.percentage)
+        XCTAssertEqual(refreshedSnapshot.observations.single?.observedAt, clock.current)
+    }
+
+    func testDisconnectInvalidatesCachedLevelForReconnectedIdentifier() async {
+        let clock = TestDateClock(Date(timeIntervalSince1970: 1_000))
+        let state = CoreBluetoothCollectionState(
+            timeoutNanoseconds: 60_000_000_000,
+            now: { clock.current }
+        )
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let device = reading(identifier: UUID(), level: nil)
+
+        let initialCollection = Task { await state.collect(using: bridge) }
+        let initialRequestID = await requests.next()!
+        await state.resolve(
+            requestID: initialRequestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+        await state.record(
+            reading(identifier: device.identifier, level: 64),
+            for: [initialRequestID],
+            generation: 0
+        )
+        _ = await initialCollection.value
+
+        await state.record(
+            BLEDeviceReading(
+                identifier: device.identifier,
+                name: device.name,
+                isConnected: false,
+                batteryLevel: nil
+            ),
+            for: [],
+            generation: 0
+        )
+
+        let reconnectedCollection = Task { await state.collect(using: bridge) }
+        let reconnectedRequestID = await requests.next()!
+        await state.resolve(
+            requestID: reconnectedRequestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+        await state.record(
+            reading(identifier: device.identifier, level: nil),
+            for: [reconnectedRequestID],
+            generation: 0
+        )
+        let reconnectedSnapshot = await reconnectedCollection.value
+
+        XCTAssertNil(reconnectedSnapshot.observations.single?.percentage)
+    }
+
     func testOverlappingRequestsCompleteIndependentlyFromOneCallback() async {
         let state = CoreBluetoothCollectionState(timeoutNanoseconds: 60_000_000_000)
         let bridge = TestBLECollectionBridge()
@@ -518,5 +658,24 @@ private final class TestBLECentralRetriever: BLEConnectedPeripheralRetrieving {
     func retrieveConnectedPeripherals(withServices serviceUUIDs: [CBUUID]) -> [CBPeripheral] {
         retrievedServiceUUIDs.append(serviceUUIDs.map(\.uuidString))
         return []
+    }
+}
+
+private final class TestDateClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date: Date
+
+    init(_ date: Date) {
+        self.date = date
+    }
+
+    var current: Date {
+        lock.withLock { date }
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.withLock {
+            date = date.addingTimeInterval(interval)
+        }
     }
 }
