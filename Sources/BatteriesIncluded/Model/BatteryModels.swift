@@ -44,6 +44,24 @@ struct DeviceBattery: Identifiable, Sendable, Equatable {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.category == rhs.category &&
         lhs.levels.map { "\($0.component):\($0.percentage)" } == rhs.levels.map { "\($0.component):\($0.percentage)" }
     }
+
+    static func componentSummary(_ levels: [(BatteryComponent, Int)]) -> String {
+        levels.map { component, percentage in
+            "\(component.displayName) \(percentage)%"
+        }.joined(separator: " · ")
+    }
+}
+
+private extension BatteryComponent {
+    var displayName: String {
+        switch self {
+        case .whole: "Battery"
+        case .left: "Left"
+        case .right: "Right"
+        case .case: "Case"
+        case .custom(let label): label
+        }
+    }
 }
 
 enum MenuState: Sendable, Equatable {
