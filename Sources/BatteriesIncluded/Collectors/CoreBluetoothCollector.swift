@@ -330,6 +330,7 @@ actor CoreBluetoothCollectionState {
 
     func timeOut(_ requestID: UUID) {
         guard let pending = pendingCollections[requestID] else { return }
+        SystemLogging.coreBluetooth.error("Battery collection timed out")
         let availability = pending.generation == epoch.current
             ? pending.availability ?? .unavailable
             : .unavailable
@@ -600,6 +601,11 @@ extension CoreBluetoothDelegateBridge: CBCentralManagerDelegate {
         error: Error?
     ) {
         guard isCurrent(peripheral) else { return }
+        if let error {
+            SystemLogging.coreBluetooth.error(
+                "Peripheral disconnected with error: \(error.localizedDescription, privacy: .public)"
+            )
+        }
         let requestIDs = peripheralOperations.invalidate(identifier: peripheral.identifier)
         let reading = BLEDeviceReading(
             identifier: peripheral.identifier,
@@ -618,6 +624,11 @@ extension CoreBluetoothDelegateBridge: CBCentralManagerDelegate {
 extension CoreBluetoothDelegateBridge: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard isCurrent(peripheral) else { return }
+        if let error {
+            SystemLogging.coreBluetooth.error(
+                "Battery service discovery failed: \(error.localizedDescription, privacy: .public)"
+            )
+        }
         guard error == nil,
               let service = peripheral.services?.first(where: {
                   $0.uuid == BLEConnectedPeripheralRetriever.batteryService
@@ -635,6 +646,11 @@ extension CoreBluetoothDelegateBridge: CBPeripheralDelegate {
         error: Error?
     ) {
         guard isCurrent(peripheral) else { return }
+        if let error {
+            SystemLogging.coreBluetooth.error(
+                "Battery characteristic discovery failed: \(error.localizedDescription, privacy: .public)"
+            )
+        }
         guard error == nil,
               let characteristic = service.characteristics?.first(where: {
                   $0.uuid == Self.batteryLevelCharacteristic
@@ -653,6 +669,11 @@ extension CoreBluetoothDelegateBridge: CBPeripheralDelegate {
     ) {
         guard isCurrent(peripheral) else { return }
         guard characteristic.uuid == Self.batteryLevelCharacteristic else { return }
+        if let error {
+            SystemLogging.coreBluetooth.error(
+                "Battery characteristic read failed: \(error.localizedDescription, privacy: .public)"
+            )
+        }
         let level = error == nil ? characteristic.value.flatMap(Self.batteryLevel(from:)) : nil
         completeRequests(for: peripheral, batteryLevel: level)
     }
