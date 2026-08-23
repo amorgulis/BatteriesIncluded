@@ -78,20 +78,41 @@ final class DeviceMonitor {
             snapshots.flatMap(\.observations),
             now: now()
         )
+        let nextState: MenuState
         if !devices.isEmpty {
-            state = .devices(devices)
+            nextState = .devices(devices)
         } else if snapshots.contains(where: { $0.availability == .permissionDenied }) {
-            state = .permissionDenied
+            nextState = .permissionDenied
         } else if snapshots.contains(where: { $0.availability == .poweredOff }) {
-            state = .bluetoothOff
+            nextState = .bluetoothOff
         } else if snapshots.contains(where: { $0.availability == .unavailable }) {
-            state = .unavailable
+            nextState = .unavailable
         } else {
-            state = .noDevices
+            nextState = .noDevices
+        }
+
+        if state != nextState {
+            SystemLogging.monitor.info(
+                "State transition: \(self.state.logName, privacy: .public) -> \(nextState.logName, privacy: .public)"
+            )
+            state = nextState
         }
     }
 
     deinit {
         refreshTask?.cancel()
+    }
+}
+
+private extension MenuState {
+    var logName: String {
+        switch self {
+        case .loading: "loading"
+        case .devices: "devices"
+        case .noDevices: "no-devices"
+        case .bluetoothOff: "bluetooth-off"
+        case .permissionDenied: "permission-denied"
+        case .unavailable: "unavailable"
+        }
     }
 }

@@ -109,6 +109,7 @@ actor SystemBluetoothCollector: BatteryCollecting {
         }
 
         guard let controller = IOBluetoothHostController.default() else {
+            SystemLogging.systemBluetooth.error("Bluetooth host controller is unavailable")
             return .unavailable
         }
 
@@ -133,10 +134,17 @@ actor SystemBluetoothCollector: BatteryCollecting {
     }
 
     private func registryPercentagesByAddress() -> [String: [BatteryComponent: Int?]] {
-        guard let matching = IOServiceMatching("IOBluetoothDevice") else { return [:] }
+        guard let matching = IOServiceMatching("IOBluetoothDevice") else {
+            SystemLogging.systemBluetooth.error("Failed to create I/O Registry Bluetooth matcher")
+            return [:]
+        }
 
         var iterator: io_iterator_t = 0
-        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
+        let result = IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator)
+        guard result == KERN_SUCCESS else {
+            SystemLogging.systemBluetooth.error(
+                "I/O Registry Bluetooth lookup failed with code \(result)"
+            )
             return [:]
         }
         defer { IOObjectRelease(iterator) }
