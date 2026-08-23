@@ -79,15 +79,29 @@ final class CoreBluetoothCollectorTests: XCTestCase {
     }
 
     func testResetInvalidatesAvailableRequestAndIgnoresLateCallback() async {
-        let state = CoreBluetoothCollectionState(timeoutNanoseconds: 60_000_000_000)
+        let epoch = BLEManagerEpoch()
+        let state = CoreBluetoothCollectionState(
+            timeoutNanoseconds: 60_000_000_000,
+            epoch: epoch
+        )
         let bridge = TestBLECollectionBridge()
         var requests = bridge.requestIDs.makeAsyncIterator()
         let device = reading(identifier: UUID(), level: nil)
 
         let collection = Task { await state.collect(using: bridge) }
         let requestID = await requests.next()!
-        await state.resolve(requestID: requestID, availability: .available, devices: [device])
-        await state.managerDidBecomeUnavailable(.unavailable, generation: 1)
+        await state.resolve(
+            requestID: requestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+        let invalidatedGeneration = epoch.current
+        epoch.advance()
+        await state.managerDidBecomeUnavailable(
+            .unavailable,
+            invalidatedGeneration: invalidatedGeneration
+        )
         await state.record(
             reading(identifier: device.identifier, level: 90),
             for: [requestID],
@@ -103,12 +117,102 @@ final class CoreBluetoothCollectorTests: XCTestCase {
         let requestAfterReset = await requests.next()!
         await state.resolve(
             requestID: requestAfterReset,
+            generation: epoch.current,
             availability: .available,
             devices: [device]
         )
         await state.timeOut(requestAfterReset)
         let snapshotAfterReset = await collectionAfterReset.value
         XCTAssertNil(snapshotAfterReset.observations.single?.percentage)
+    }
+
+    func testStaleCallbackIsRejectedWhenDeliveredBeforeResetActorMessage() async {
+        let epoch = BLEManagerEpoch()
+        let state = CoreBluetoothCollectionState(
+            timeoutNanoseconds: 60_000_000_000,
+            epoch: epoch
+        )
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let device = reading(identifier: UUID(), level: nil)
+
+        let collection = Task { await state.collect(using: bridge) }
+        let requestID = await requests.next()!
+        await state.resolve(
+            requestID: requestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+
+        let invalidatedGeneration = epoch.current
+        epoch.advance()
+        await state.record(
+            reading(identifier: device.identifier, level: 91),
+            for: [requestID],
+            generation: invalidatedGeneration
+        )
+        await state.managerDidBecomeUnavailable(
+            .unavailable,
+            invalidatedGeneration: invalidatedGeneration
+        )
+        let snapshot = await collection.value
+
+        XCTAssertEqual(snapshot.availability, .unavailable)
+        XCTAssertTrue(snapshot.observations.isEmpty)
+        XCTAssertEqual(bridge.cancelCount(for: requestID), 1)
+    }
+
+    func testDelayedResetDoesNotFinishNewerGenerationRequest() async {
+        let epoch = BLEManagerEpoch()
+        let state = CoreBluetoothCollectionState(
+            timeoutNanoseconds: 60_000_000_000,
+            epoch: epoch
+        )
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let oldDevice = reading(identifier: UUID(), level: nil)
+        let newDevice = reading(identifier: UUID(), level: nil)
+
+        let oldCollection = Task { await state.collect(using: bridge) }
+        let oldRequestID = await requests.next()!
+        await state.resolve(
+            requestID: oldRequestID,
+            generation: 0,
+            availability: .available,
+            devices: [oldDevice]
+        )
+
+        let invalidatedGeneration = epoch.current
+        epoch.advance()
+        let currentGeneration = epoch.current
+
+        let newCollection = Task { await state.collect(using: bridge) }
+        let newRequestID = await requests.next()!
+        await state.resolve(
+            requestID: newRequestID,
+            generation: currentGeneration,
+            availability: .available,
+            devices: [newDevice]
+        )
+
+        await state.managerDidBecomeUnavailable(
+            .unavailable,
+            invalidatedGeneration: invalidatedGeneration
+        )
+        await state.record(
+            reading(identifier: newDevice.identifier, level: 73),
+            for: [newRequestID],
+            generation: currentGeneration
+        )
+        let oldSnapshot = await oldCollection.value
+        let newSnapshot = await newCollection.value
+
+        XCTAssertEqual(oldSnapshot.availability, .unavailable)
+        XCTAssertEqual(newSnapshot.availability, .available)
+        XCTAssertEqual(newSnapshot.observations.single?.percentage, 73)
+        XCTAssertEqual(bridge.cancelCount(for: oldRequestID), 1)
+        XCTAssertEqual(bridge.cancelCount(for: newRequestID), 1)
     }
 
     func testTimeoutAndCallbackRaceResolvesExactlyOnce() async {
@@ -119,16 +223,53 @@ final class CoreBluetoothCollectorTests: XCTestCase {
 
         let collection = Task { await state.collect(using: bridge) }
         let requestID = await requests.next()!
-        await state.resolve(requestID: requestID, availability: .available, devices: [device])
+        await state.resolve(
+            requestID: requestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
         let callbackReading = reading(identifier: device.identifier, level: 75)
 
         async let timeout: Void = state.timeOut(requestID)
-        async let callback: Void = state.record(callbackReading, for: [requestID])
+        async let callback: Void = state.record(
+            callbackReading,
+            for: [requestID],
+            generation: 0
+        )
         _ = await (timeout, callback)
         let snapshot = await collection.value
 
         XCTAssertEqual(snapshot.availability, .available)
         XCTAssertEqual(snapshot.observations.count, 1)
+        XCTAssertEqual(bridge.cancelCount(for: requestID), 1)
+    }
+
+    func testTimeoutAfterEpochAdvanceCannotEmitAvailableBeforeResetMessage() async {
+        let epoch = BLEManagerEpoch()
+        let state = CoreBluetoothCollectionState(
+            timeoutNanoseconds: 60_000_000_000,
+            epoch: epoch
+        )
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let device = reading(identifier: UUID(), level: nil)
+
+        let collection = Task { await state.collect(using: bridge) }
+        let requestID = await requests.next()!
+        await state.resolve(
+            requestID: requestID,
+            generation: epoch.current,
+            availability: .available,
+            devices: [device]
+        )
+
+        epoch.advance()
+        await state.timeOut(requestID)
+        let snapshot = await collection.value
+
+        XCTAssertEqual(snapshot.availability, .unavailable)
+        XCTAssertTrue(snapshot.observations.isEmpty)
         XCTAssertEqual(bridge.cancelCount(for: requestID), 1)
     }
 
@@ -140,8 +281,17 @@ final class CoreBluetoothCollectorTests: XCTestCase {
 
         let collection = Task { await state.collect(using: bridge) }
         let requestID = await requests.next()!
-        await state.record(reading(identifier: device.identifier, level: 64), for: [requestID])
-        await state.resolve(requestID: requestID, availability: .available, devices: [device])
+        await state.record(
+            reading(identifier: device.identifier, level: 64),
+            for: [requestID],
+            generation: 0
+        )
+        await state.resolve(
+            requestID: requestID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
         let snapshot = await collection.value
 
         XCTAssertEqual(snapshot.observations.single?.percentage, 64)
@@ -160,11 +310,22 @@ final class CoreBluetoothCollectorTests: XCTestCase {
         let secondID = await requests.next()!
         XCTAssertNotEqual(firstID, secondID)
 
-        await state.resolve(requestID: firstID, availability: .available, devices: [device])
-        await state.resolve(requestID: secondID, availability: .available, devices: [device])
+        await state.resolve(
+            requestID: firstID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
+        await state.resolve(
+            requestID: secondID,
+            generation: 0,
+            availability: .available,
+            devices: [device]
+        )
         await state.record(
             reading(identifier: device.identifier, level: 88),
-            for: [firstID, secondID]
+            for: [firstID, secondID],
+            generation: 0
         )
         let first = await firstCollection.value
         let second = await secondCollection.value
@@ -175,7 +336,11 @@ final class CoreBluetoothCollectorTests: XCTestCase {
     }
 
     func testPoweredOffAndPermissionDeniedFinishPendingRequests() async {
-        let state = CoreBluetoothCollectionState(timeoutNanoseconds: 60_000_000_000)
+        let epoch = BLEManagerEpoch()
+        let state = CoreBluetoothCollectionState(
+            timeoutNanoseconds: 60_000_000_000,
+            epoch: epoch
+        )
         let bridge = TestBLECollectionBridge()
         var requests = bridge.requestIDs.makeAsyncIterator()
 
@@ -183,7 +348,12 @@ final class CoreBluetoothCollectorTests: XCTestCase {
         let secondCollection = Task { await state.collect(using: bridge) }
         _ = await requests.next()!
         _ = await requests.next()!
-        await state.managerDidBecomeUnavailable(.poweredOff)
+        let invalidatedGeneration = epoch.current
+        epoch.advance()
+        await state.managerDidBecomeUnavailable(
+            .poweredOff,
+            invalidatedGeneration: invalidatedGeneration
+        )
 
         let first = await firstCollection.value
         let second = await secondCollection.value
@@ -192,7 +362,12 @@ final class CoreBluetoothCollectorTests: XCTestCase {
 
         let deniedCollection = Task { await state.collect(using: bridge) }
         let deniedID = await requests.next()!
-        await state.resolve(requestID: deniedID, availability: .permissionDenied, devices: [])
+        await state.resolve(
+            requestID: deniedID,
+            generation: epoch.current,
+            availability: .permissionDenied,
+            devices: []
+        )
         let denied = await deniedCollection.value
         XCTAssertEqual(denied.availability, .permissionDenied)
     }
@@ -204,7 +379,12 @@ final class CoreBluetoothCollectorTests: XCTestCase {
 
         let collection = Task { await state.collect(using: bridge) }
         let requestID = await requests.next()!
-        await state.resolve(requestID: requestID, availability: .available, devices: [])
+        await state.resolve(
+            requestID: requestID,
+            generation: 0,
+            availability: .available,
+            devices: []
+        )
         _ = await collection.value
 
         XCTAssertEqual(

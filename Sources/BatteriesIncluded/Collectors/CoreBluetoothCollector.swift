@@ -47,6 +47,25 @@ enum BLEManagerStateMapper {
     }
 }
 
+final class BLEManagerEpoch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+
+    var current: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    @discardableResult
+    func advance() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        value &+= 1
+        return value
+    }
+}
+
 protocol BLECollectionBridging: Sendable {
     func retrieveConnectedPeripherals(for requestID: UUID)
     func cancel(requestID: UUID)
@@ -140,9 +159,10 @@ actor CoreBluetoothCollector: BatteryCollecting {
     private let bridge: CoreBluetoothDelegateBridge
 
     init() {
-        let state = CoreBluetoothCollectionState()
+        let epoch = BLEManagerEpoch()
+        let state = CoreBluetoothCollectionState(epoch: epoch)
         self.state = state
-        self.bridge = CoreBluetoothDelegateBridge(state: state)
+        self.bridge = CoreBluetoothDelegateBridge(state: state, epoch: epoch)
     }
 
     func collect() async -> CollectorSnapshot {
@@ -171,10 +191,17 @@ actor CoreBluetoothCollector: BatteryCollecting {
 
 actor CoreBluetoothCollectionState {
     private let timeoutNanoseconds: UInt64
+    private let epoch: BLEManagerEpoch
+
+    private struct CachedLevel {
+        let generation: UInt64
+        let level: Int
+    }
 
     private struct PendingCollection {
         let continuation: CheckedContinuation<CollectorSnapshot, Never>
         let bridge: any BLECollectionBridging
+        let generation: UInt64
         var availability: BluetoothAvailability?
         var devices: [UUID: BLEDeviceReading] = [:]
         var awaiting: Set<UUID> = []
@@ -182,12 +209,15 @@ actor CoreBluetoothCollectionState {
         var timeoutTask: Task<Void, Never>?
     }
 
-    private var batteryLevels: [UUID: Int] = [:]
+    private var batteryLevels: [UUID: CachedLevel] = [:]
     private var pendingCollections: [UUID: PendingCollection] = [:]
-    private var managerGeneration: UInt64 = 0
 
-    init(timeoutNanoseconds: UInt64 = 2_000_000_000) {
+    init(
+        timeoutNanoseconds: UInt64 = 2_000_000_000,
+        epoch: BLEManagerEpoch = BLEManagerEpoch()
+    ) {
         self.timeoutNanoseconds = timeoutNanoseconds
+        self.epoch = epoch
     }
 
     func collect(using bridge: any BLECollectionBridging) async -> CollectorSnapshot {
@@ -196,7 +226,8 @@ actor CoreBluetoothCollectionState {
         return await withCheckedContinuation { continuation in
             pendingCollections[requestID] = PendingCollection(
                 continuation: continuation,
-                bridge: bridge
+                bridge: bridge,
+                generation: epoch.current
             )
 
             let timeoutNanoseconds = timeoutNanoseconds
@@ -218,10 +249,13 @@ actor CoreBluetoothCollectionState {
 
     func resolve(
         requestID: UUID,
+        generation: UInt64,
         availability: BluetoothAvailability,
         devices: [BLEDeviceReading]
     ) {
-        guard var pending = pendingCollections[requestID] else { return }
+        guard var pending = pendingCollections[requestID],
+              pending.generation == generation,
+              generation == epoch.current else { return }
 
         pending.availability = availability
         guard availability == .available else {
@@ -235,7 +269,9 @@ actor CoreBluetoothCollectionState {
         pending.awaiting.subtract(pending.finishedBeforeResolution)
         pendingCollections[requestID] = pending
 
-        if pending.awaiting.isEmpty || pending.devices.keys.allSatisfy({ batteryLevels[$0] != nil }) {
+        if pending.awaiting.isEmpty || pending.devices.keys.allSatisfy({ identifier in
+            batteryLevels[identifier]?.generation == generation
+        }) {
             finish(requestID, availability: .available)
         }
     }
@@ -243,16 +279,20 @@ actor CoreBluetoothCollectionState {
     func record(
         _ reading: BLEDeviceReading,
         for requestIDs: [UUID],
-        generation: UInt64? = nil
+        generation: UInt64
     ) {
-        if let generation, generation != managerGeneration { return }
+        guard generation == epoch.current else { return }
 
         if let level = reading.batteryLevel {
-            batteryLevels[reading.identifier] = level
+            batteryLevels[reading.identifier] = CachedLevel(
+                generation: generation,
+                level: level
+            )
         }
 
         for requestID in requestIDs {
-            guard var pending = pendingCollections[requestID] else { continue }
+            guard var pending = pendingCollections[requestID],
+                  pending.generation == generation else { continue }
 
             pending.devices[reading.identifier] = reading
             if pending.availability == nil {
@@ -270,22 +310,30 @@ actor CoreBluetoothCollectionState {
 
     func managerDidBecomeUnavailable(
         _ availability: BluetoothAvailability,
-        generation: UInt64? = nil
+        invalidatedGeneration: UInt64
     ) {
         guard availability != .available else { return }
-        if let generation {
-            guard generation >= managerGeneration else { return }
-            managerGeneration = generation
+        let invalidatedCacheIDs = batteryLevels.compactMap { identifier, cachedLevel in
+            cachedLevel.generation == invalidatedGeneration ? identifier : nil
         }
-        batteryLevels.removeAll()
-        for requestID in Array(pendingCollections.keys) {
+        for identifier in invalidatedCacheIDs {
+            batteryLevels.removeValue(forKey: identifier)
+        }
+
+        let affectedRequestIDs = pendingCollections.compactMap { requestID, pending in
+            pending.generation == invalidatedGeneration ? requestID : nil
+        }
+        for requestID in affectedRequestIDs {
             finish(requestID, availability: availability)
         }
     }
 
     func timeOut(_ requestID: UUID) {
         guard let pending = pendingCollections[requestID] else { return }
-        finish(requestID, availability: pending.availability ?? .unavailable)
+        let availability = pending.generation == epoch.current
+            ? pending.availability ?? .unavailable
+            : .unavailable
+        finish(requestID, availability: availability)
     }
 
     private func finish(_ requestID: UUID, availability: BluetoothAvailability) {
@@ -299,11 +347,14 @@ actor CoreBluetoothCollectionState {
             observations = pending.devices.values
                 .sorted { $0.identifier.uuidString < $1.identifier.uuidString }
                 .flatMap { device in
+                    let cachedLevel = batteryLevels[device.identifier]
                     let reading = BLEDeviceReading(
                         identifier: device.identifier,
                         name: device.name,
                         isConnected: device.isConnected,
-                        batteryLevel: batteryLevels[device.identifier] ?? device.batteryLevel
+                        batteryLevel: cachedLevel?.generation == pending.generation
+                            ? cachedLevel?.level
+                            : device.batteryLevel
                     )
                     return CoreBluetoothCollector.map(reading, now: .now)
                 }
@@ -325,13 +376,14 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
 
     private let queue = DispatchQueue(label: "BatteriesIncluded.CoreBluetoothCollector")
     private let state: CoreBluetoothCollectionState
+    private let epoch: BLEManagerEpoch
     private var centralManager: CBCentralManager?
     private var waitingForManager: Set<UUID> = []
     private var peripheralOperations = BLEPeripheralOperationRegistry<CBPeripheral>()
-    private var managerGeneration: UInt64 = 0
 
-    init(state: CoreBluetoothCollectionState) {
+    init(state: CoreBluetoothCollectionState, epoch: BLEManagerEpoch) {
         self.state = state
+        self.epoch = epoch
         super.init()
 
         queue.async { [self] in
@@ -365,13 +417,16 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
             waitingForManager.insert(requestID)
             return
         case .finish(let availability):
+            let invalidatedGeneration = epoch.current
+            epoch.advance()
             waitingForManager.removeAll()
             peripheralOperations.invalidateAll()
-            managerGeneration &+= 1
-            let generation = managerGeneration
             let state = state
             Task {
-                await state.managerDidBecomeUnavailable(availability, generation: generation)
+                await state.managerDidBecomeUnavailable(
+                    availability,
+                    invalidatedGeneration: invalidatedGeneration
+                )
             }
             return
         case .collect:
@@ -459,7 +514,7 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
             batteryLevel: batteryLevel
         )
         let state = state
-        let generation = managerGeneration
+        let generation = epoch.current
         Task {
             await state.record(reading, for: requestIDs, generation: generation)
         }
@@ -477,7 +532,7 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
                 batteryLevel: nil
             )
             let state = state
-            let generation = managerGeneration
+            let generation = epoch.current
             Task {
                 await state.record(reading, for: requestIDs, generation: generation)
             }
@@ -494,9 +549,11 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
         devices: [BLEDeviceReading]
     ) {
         let state = state
+        let generation = epoch.current
         Task {
             await state.resolve(
                 requestID: requestID,
+                generation: generation,
                 availability: availability,
                 devices: devices
             )
@@ -523,13 +580,16 @@ extension CoreBluetoothDelegateBridge: CBCentralManagerDelegate {
                 beginRequest(requestID, centralManager: central)
             }
         case .finish(let availability):
+            let invalidatedGeneration = epoch.current
+            epoch.advance()
             waitingForManager.removeAll()
             peripheralOperations.invalidateAll()
-            managerGeneration &+= 1
-            let generation = managerGeneration
             let state = state
             Task {
-                await state.managerDidBecomeUnavailable(availability, generation: generation)
+                await state.managerDidBecomeUnavailable(
+                    availability,
+                    invalidatedGeneration: invalidatedGeneration
+                )
             }
         }
     }
@@ -548,7 +608,7 @@ extension CoreBluetoothDelegateBridge: CBCentralManagerDelegate {
             batteryLevel: nil
         )
         let state = state
-        let generation = managerGeneration
+        let generation = epoch.current
         Task {
             await state.record(reading, for: requestIDs, generation: generation)
         }
