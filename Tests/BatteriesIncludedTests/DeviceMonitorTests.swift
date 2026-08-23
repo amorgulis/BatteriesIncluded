@@ -122,6 +122,45 @@ final class DeviceMonitorTests: XCTestCase {
         XCTAssertTrue(observedOverlap)
     }
 
+    func testRefreshPreservesCollectorDeclarationOrderWhenCollectorsCompleteInReverse() async {
+        let now = Date()
+        let declaredFirst = BatteryObservation(
+            sourceID: "first", stableID: "shared", name: "Declared First", isConnected: true,
+            category: .mouse, component: .whole, percentage: 31,
+            source: .system, observedAt: now
+        )
+        let completedFirst = BatteryObservation(
+            sourceID: "second", stableID: "shared", name: "Completed First", isConnected: true,
+            category: .keyboard, component: .whole, percentage: 92,
+            source: .system, observedAt: now
+        )
+        let firstCollector = BlockingCollector()
+        let secondCollector = BlockingCollector()
+        let monitor = DeviceMonitor(
+            collectors: [firstCollector, secondCollector],
+            now: { now }
+        )
+
+        let refresh = Task { await monitor.refresh() }
+        await firstCollector.waitForInvocation()
+        await secondCollector.waitForInvocation()
+        await secondCollector.finish(
+            with: .init(availability: .available, observations: [completedFirst])
+        )
+        try? await Task.sleep(for: .milliseconds(10))
+        await firstCollector.finish(
+            with: .init(availability: .available, observations: [declaredFirst])
+        )
+        await refresh.value
+
+        guard case .devices(let devices) = monitor.state, let device = devices.first else {
+            return XCTFail("Expected one normalized device")
+        }
+        XCTAssertEqual(device.name, "Declared First")
+        XCTAssertEqual(device.category, .mouse)
+        XCTAssertEqual(device.levels.first?.percentage, 31)
+    }
+
     func testPermissionDenialWinsWhenNoDevicesAreReadable() async {
         let monitor = DeviceMonitor(
             collectors: [

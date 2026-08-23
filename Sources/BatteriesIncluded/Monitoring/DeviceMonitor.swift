@@ -55,18 +55,21 @@ final class DeviceMonitor {
         defer { isRefreshing = false }
 
         let collectors = collectors
-        let snapshots = await withTaskGroup(of: CollectorSnapshot.self, returning: [CollectorSnapshot].self) { group in
-            for collector in collectors {
+        let snapshots = await withTaskGroup(
+            of: (Int, CollectorSnapshot).self,
+            returning: [CollectorSnapshot].self
+        ) { group in
+            for (index, collector) in collectors.enumerated() {
                 group.addTask {
-                    await collector.collect()
+                    (index, await collector.collect())
                 }
             }
 
-            var snapshots: [CollectorSnapshot] = []
-            for await snapshot in group {
-                snapshots.append(snapshot)
+            var indexedSnapshots: [(Int, CollectorSnapshot)] = []
+            for await indexedSnapshot in group {
+                indexedSnapshots.append(indexedSnapshot)
             }
-            return snapshots
+            return indexedSnapshots.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
 
         guard !Task.isCancelled else { return }
