@@ -1,0 +1,10 @@
+#!/bin/zsh
+set -euo pipefail
+
+if [[ "$#" -ne 3 || "$1" != "build" || "$2" != "-c" || "$3" != "release" ]]; then
+  print -u2 -- "Unexpected fake Swift arguments: $*"
+  exit 1
+fi
+
+mkdir -p .build/release
+cp /usr/bin/true .build/release/BatteriesIncluded

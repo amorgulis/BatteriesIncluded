@@ -192,10 +192,12 @@ actor CoreBluetoothCollector: BatteryCollecting {
 actor CoreBluetoothCollectionState {
     private let timeoutNanoseconds: UInt64
     private let epoch: BLEManagerEpoch
+    private let now: @Sendable () -> Date
 
     private struct CachedLevel {
         let generation: UInt64
         let level: Int
+        let observedAt: Date
     }
 
     private struct PendingCollection {
@@ -214,10 +216,12 @@ actor CoreBluetoothCollectionState {
 
     init(
         timeoutNanoseconds: UInt64 = 2_000_000_000,
-        epoch: BLEManagerEpoch = BLEManagerEpoch()
+        epoch: BLEManagerEpoch = BLEManagerEpoch(),
+        now: @escaping @Sendable () -> Date = { .now }
     ) {
         self.timeoutNanoseconds = timeoutNanoseconds
         self.epoch = epoch
+        self.now = now
     }
 
     func collect(using bridge: any BLECollectionBridging) async -> CollectorSnapshot {
@@ -269,8 +273,11 @@ actor CoreBluetoothCollectionState {
         pending.awaiting.subtract(pending.finishedBeforeResolution)
         pendingCollections[requestID] = pending
 
+        let resolvedAt = now()
         if pending.awaiting.isEmpty || pending.devices.keys.allSatisfy({ identifier in
-            batteryLevels[identifier]?.generation == generation
+            batteryLevels[identifier].map {
+                isFresh($0, generation: generation, at: resolvedAt)
+            } ?? false
         }) {
             finish(requestID, availability: .available)
         }
@@ -283,10 +290,13 @@ actor CoreBluetoothCollectionState {
     ) {
         guard generation == epoch.current else { return }
 
-        if let level = reading.batteryLevel {
+        if !reading.isConnected {
+            batteryLevels.removeValue(forKey: reading.identifier)
+        } else if let level = reading.batteryLevel {
             batteryLevels[reading.identifier] = CachedLevel(
                 generation: generation,
-                level: level
+                level: level,
+                observedAt: now()
             )
         }
 
@@ -345,19 +355,24 @@ actor CoreBluetoothCollectionState {
 
         let observations: [BatteryObservation]
         if availability == .available {
+            let finishedAt = now()
             observations = pending.devices.values
                 .sorted { $0.identifier.uuidString < $1.identifier.uuidString }
                 .flatMap { device in
                     let cachedLevel = batteryLevels[device.identifier]
+                    let freshCachedLevel = cachedLevel.flatMap {
+                        isFresh($0, generation: pending.generation, at: finishedAt) ? $0 : nil
+                    }
                     let reading = BLEDeviceReading(
                         identifier: device.identifier,
                         name: device.name,
                         isConnected: device.isConnected,
-                        batteryLevel: cachedLevel?.generation == pending.generation
-                            ? cachedLevel?.level
-                            : device.batteryLevel
+                        batteryLevel: freshCachedLevel?.level ?? device.batteryLevel
                     )
-                    return CoreBluetoothCollector.map(reading, now: .now)
+                    return CoreBluetoothCollector.map(
+                        reading,
+                        now: freshCachedLevel?.observedAt ?? finishedAt
+                    )
                 }
         } else {
             observations = []
@@ -369,6 +384,11 @@ actor CoreBluetoothCollectionState {
                 observations: observations
             )
         )
+    }
+
+    private func isFresh(_ cachedLevel: CachedLevel, generation: UInt64, at date: Date) -> Bool {
+        cachedLevel.generation == generation &&
+            date.timeIntervalSince(cachedLevel.observedAt) <= 60
     }
 }
 

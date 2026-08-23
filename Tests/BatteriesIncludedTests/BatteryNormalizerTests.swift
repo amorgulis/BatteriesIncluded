@@ -41,6 +41,28 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result[0].levels.map(\.component), [.left, .right, .case])
     }
 
+    func testSuppressesWholeWhenFreshValidComponentExists() {
+        let result = BatteryNormalizer().normalize([
+            observation(component: .whole, percentage: 90),
+            observation(component: .left, percentage: 80)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.left])
+        XCTAssertEqual(result[0].levels.map(\.percentage), [80])
+    }
+
+    func testKeepsValidWholeWhenComponentsAreInvalidOrStale() {
+        let result = BatteryNormalizer().normalize([
+            observation(component: .whole, percentage: 90),
+            observation(component: .left, percentage: -1),
+            observation(component: .right, percentage: 101),
+            observation(component: .case, percentage: 70, age: 61)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.whole])
+        XCTAssertEqual(result[0].levels.map(\.percentage), [90])
+    }
+
     func testPrefersBLEReadingWithinOneSecond() {
         let result = BatteryNormalizer().normalize([
             observation(percentage: 90, source: .system),

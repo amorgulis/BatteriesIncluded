@@ -49,6 +49,10 @@ struct BatteryNormalizer: Sendable {
             }
         }
 
+        if selected.keys.contains(where: { $0 != .whole }) {
+            selected.removeValue(forKey: .whole)
+        }
+
         let levels = selected.map { (component: $0.key, percentage: $0.value.percentage!) }
             .sorted { $0.component < $1.component }
 
