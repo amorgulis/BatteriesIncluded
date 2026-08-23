@@ -5,3 +5,4 @@ DerivedData/
 .superpowers/
 *.xcuserstate
 xcuserdata/
+.worktrees/
