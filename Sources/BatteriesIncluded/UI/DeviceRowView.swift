@@ -9,8 +9,8 @@ extension DeviceBattery {
         return Self.componentSummary(levels)
     }
 
-    fileprivate var hasTrailingWholeBatteryLevel: Bool {
-        levels.count == 1 && levels[0].component == .whole
+    var menuRowText: String {
+        "\(name) — \(primaryBatteryText)"
     }
 }
 
@@ -18,24 +18,6 @@ struct DeviceRowView: View {
     let device: DeviceBattery
 
     var body: some View {
-        Label {
-            HStack {
-                VStack(alignment: .leading) {
-                    Text(device.name)
-                    if !device.hasTrailingWholeBatteryLevel {
-                        Text(device.primaryBatteryText)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if device.hasTrailingWholeBatteryLevel {
-                    Spacer()
-                    Text(device.primaryBatteryText)
-                        .monospacedDigit()
-                }
-            }
-        } icon: {
-            DeviceIcon(category: device.category)
-        }
+        Label(device.menuRowText, systemImage: DeviceIcon.symbol(for: device.category))
     }
 }
