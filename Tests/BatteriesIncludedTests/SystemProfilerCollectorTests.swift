@@ -8,21 +8,20 @@ final class SystemProfilerCollectorTests: XCTestCase {
         let data = Data(#"""
         {
           "SPBluetoothDataType": [{
-            "controller_properties": {
-              "device_connected": [{
+            "controller_properties": {},
+            "device_connected": [{
                 "M720 Triathlon": {
                   "device_address": "F0:CF:B8:FD:A9:B8",
                   "device_batteryLevelMain": "100%",
                   "device_minorType": "Mouse"
                 }
               }],
-              "device_not_connected": [{
+            "device_not_connected": [{
                 "Old Mouse": {
                   "device_address": "00:11:22:33:44:55",
                   "device_batteryLevelMain": "20%"
                 }
               }]
-            }
           }]
         }
         """#.utf8)
