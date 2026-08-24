@@ -11,7 +11,8 @@ struct SystemProfilerBluetoothParser: Sendable {
         var observations: [BatteryObservation] = []
         for report in reports {
             guard let controller = report["controller_properties"] as? [String: Any],
-                  let connected = controller["device_connected"] as? [[String: Any]] else {
+                  let connected = (report["device_connected"] ?? controller["device_connected"])
+                    as? [[String: Any]] else {
                 continue
             }
 
