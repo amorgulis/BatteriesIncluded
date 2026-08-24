@@ -69,7 +69,10 @@ actor SystemBluetoothCollector: BatteryCollecting {
         let address = normalizedAddress(reading.address)
         guard !address.isEmpty else { return [] }
 
-        let levels = reading.percentages.compactMap { component, percentage in
+        let relevantPercentages = reading.percentages.filter { component, _ in
+            reading.category == .headphones || component == .whole
+        }
+        let levels = relevantPercentages.compactMap { component, percentage in
             percentage.map { (component, $0) }
         }.sorted { $0.0 < $1.0 }
 

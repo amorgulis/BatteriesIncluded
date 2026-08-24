@@ -69,4 +69,20 @@ final class SystemBluetoothCollectorTests: XCTestCase {
         XCTAssertEqual(result[.right]!, 79)
         XCTAssertEqual(result[.case]!, 55)
     }
+
+    func testMouseIgnoresBogusHeadphoneComponentSelectors() {
+        let reading = SystemDeviceReading(
+            address: "F0:CF:B8:FD:A9:B8",
+            name: "M720 Triathlon",
+            isConnected: true,
+            category: .mouse,
+            percentages: [.left: 0, .right: 0, .case: 0]
+        )
+
+        let observations = SystemBluetoothCollector.map(reading, now: .distantPast)
+
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations[0].component, .whole)
+        XCTAssertNil(observations[0].percentage)
+    }
 }
