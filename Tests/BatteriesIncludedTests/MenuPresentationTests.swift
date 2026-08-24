@@ -31,6 +31,17 @@ final class MenuPresentationTests: XCTestCase {
         XCTAssertEqual(device.primaryBatteryText, "73%")
     }
 
+    func testMenuRowKeepsMouseNameAndPercentageInOneVisibleString() {
+        let device = DeviceBattery(
+            id: "x",
+            name: "M720 Triathlon",
+            category: .mouse,
+            levels: [(component: .whole, percentage: 100)]
+        )
+
+        XCTAssertEqual(device.menuRowText, "M720 Triathlon — 100%")
+    }
+
     func testComponentDeviceUsesSummaryAsPrimaryText() {
         let device = DeviceBattery(
             id: "x",
