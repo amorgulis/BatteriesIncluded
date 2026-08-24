@@ -80,6 +80,9 @@ struct BatteryNormalizer: Sendable {
     }
 
     private func isPreferred(_ candidate: BatteryObservation, over existing: BatteryObservation) -> Bool {
+        if candidate.source == .systemProfiler || existing.source == .systemProfiler {
+            return candidate.source.rawValue > existing.source.rawValue
+        }
         let difference = abs(candidate.observedAt.timeIntervalSince(existing.observedAt))
         if difference <= 1 {
             if candidate.source.rawValue != existing.source.rawValue {
