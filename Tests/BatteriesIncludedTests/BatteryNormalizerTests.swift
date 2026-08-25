@@ -79,6 +79,29 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result.count, 2)
     }
 
+    func testMergesUniqueSystemAndBLEGroupsWithSameDeviceName() {
+        let result = BatteryNormalizer().normalize([
+            observation(
+                id: "D0:28:33:06:B7:96",
+                stableID: "D0:28:33:06:B7:96",
+                name: "Keychron K1 Max (work)",
+                percentage: nil,
+                source: .system
+            ),
+            observation(
+                id: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                stableID: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                name: "Keychron K1 Max (work)",
+                percentage: 62,
+                source: .coreBluetooth
+            )
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].id, "stable:D0:28:33:06:B7:96")
+        XCTAssertEqual(result[0].levels.map(\.percentage), [62])
+    }
+
     func testDropsDisconnectedObservations() {
         let result = BatteryNormalizer().normalize([
             observation(connected: false)
