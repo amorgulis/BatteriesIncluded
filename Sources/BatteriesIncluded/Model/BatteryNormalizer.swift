@@ -40,31 +40,32 @@ struct BatteryNormalizer: Sendable {
             keysByName[normalizedName, default: []].append(key)
         }
 
-        for keys in keysByName.values where keys.count == 2 {
-            let sortedKeys = keys.sorted()
-            guard let first = grouped[sortedKeys[0]],
-                  let second = grouped[sortedKeys[1]] else { continue }
-
-            let firstSources = Set(first.map(\.source))
-            let secondSources = Set(second.map(\.source))
-            let systemSources: Set<BatterySource> = [.system, .systemProfiler]
-
-            let systemKey: String
-            let bleKey: String
-            if !firstSources.isDisjoint(with: systemSources), firstSources.contains(.coreBluetooth) == false,
-               secondSources == [.coreBluetooth] {
-                systemKey = sortedKeys[0]
-                bleKey = sortedKeys[1]
-            } else if !secondSources.isDisjoint(with: systemSources), secondSources.contains(.coreBluetooth) == false,
-                      firstSources == [.coreBluetooth] {
-                systemKey = sortedKeys[1]
-                bleKey = sortedKeys[0]
-            } else {
-                continue
+        for keys in keysByName.values where keys.count >= 2 {
+            let keyedClasses = keys.compactMap { key -> (String, Int)? in
+                guard let values = grouped[key], let sourceClass = sourceClass(for: values) else {
+                    return nil
+                }
+                return (key, sourceClass)
             }
+            guard keyedClasses.count == keys.count,
+                  Set(keyedClasses.map(\.1)).count == keyedClasses.count else { continue }
 
-            grouped[systemKey, default: []].append(contentsOf: grouped.removeValue(forKey: bleKey) ?? [])
+            let anchor = keyedClasses.min { $0.1 < $1.1 }!.0
+            for key in keyedClasses.map(\.0) where key != anchor {
+                grouped[anchor, default: []].append(
+                    contentsOf: grouped.removeValue(forKey: key) ?? []
+                )
+            }
         }
+    }
+
+    private func sourceClass(for observations: [BatteryObservation]) -> Int? {
+        let sources = Set(observations.map(\.source))
+        if !sources.isDisjoint(with: [.system, .systemProfiler]) &&
+            sources.isSubset(of: [.system, .systemProfiler]) { return 0 }
+        if sources == [.coreBluetooth] { return 1 }
+        if sources == [.logitechHID] { return 2 }
+        return nil
     }
 
     private func makeDevice(from observations: [BatteryObservation], now: Date) -> DeviceBattery {
