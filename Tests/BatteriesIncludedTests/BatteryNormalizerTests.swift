@@ -102,6 +102,43 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result[0].levels.map(\.percentage), [62])
     }
 
+    func testMergesUniqueBluetoothAndLogitechHIDGroupsWithSameDeviceName() {
+        let result = BatteryNormalizer().normalize([
+            observation(
+                id: "D0:28:33:06:B7:96", stableID: "D0:28:33:06:B7:96",
+                name: "MX Master 3S", percentage: 44, source: .system
+            ),
+            observation(
+                id: "receiver:1", stableID: nil, name: "MX Master 3S",
+                percentage: 72, source: .logitechHID
+            )
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].levels.map(\.percentage), [72])
+    }
+
+    func testMergesUniqueSystemBLEAndLogitechHIDGroupsWithSameDeviceName() {
+        let result = BatteryNormalizer().normalize([
+            observation(
+                id: "D0:28:33:06:B7:96", stableID: "D0:28:33:06:B7:96",
+                name: "MX Master 3S", percentage: nil, source: .system
+            ),
+            observation(
+                id: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                stableID: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                name: "MX Master 3S", percentage: 44, source: .coreBluetooth
+            ),
+            observation(
+                id: "receiver:1", stableID: nil, name: "MX Master 3S",
+                percentage: 72, source: .logitechHID
+            )
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].levels.map(\.percentage), [72])
+    }
+
     func testDropsDisconnectedObservations() {
         let result = BatteryNormalizer().normalize([
             observation(connected: false)
