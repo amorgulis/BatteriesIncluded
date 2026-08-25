@@ -9,6 +9,8 @@ struct BatteryNormalizer: Sendable {
             grouped[key, default: []].append(observation)
         }
 
+        mergeUniqueCrossSourceGroupsByName(&grouped)
+
         return grouped.values.map { observations in
             makeDevice(from: observations, now: now)
         }.sorted {
@@ -25,6 +27,44 @@ struct BatteryNormalizer: Sendable {
             return "stable:\(stableID)"
         }
         return "\(observation.source.rawValue):\(observation.sourceID)"
+    }
+
+    private func mergeUniqueCrossSourceGroupsByName(
+        _ grouped: inout [String: [BatteryObservation]]
+    ) {
+        var keysByName: [String: [String]] = [:]
+        for (key, values) in grouped {
+            guard let name = values.first(where: { !$0.name.isEmpty })?.name else { continue }
+            let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalizedName.isEmpty else { continue }
+            keysByName[normalizedName, default: []].append(key)
+        }
+
+        for keys in keysByName.values where keys.count == 2 {
+            let sortedKeys = keys.sorted()
+            guard let first = grouped[sortedKeys[0]],
+                  let second = grouped[sortedKeys[1]] else { continue }
+
+            let firstSources = Set(first.map(\.source))
+            let secondSources = Set(second.map(\.source))
+            let systemSources: Set<BatterySource> = [.system, .systemProfiler]
+
+            let systemKey: String
+            let bleKey: String
+            if !firstSources.isDisjoint(with: systemSources), firstSources.contains(.coreBluetooth) == false,
+               secondSources == [.coreBluetooth] {
+                systemKey = sortedKeys[0]
+                bleKey = sortedKeys[1]
+            } else if !secondSources.isDisjoint(with: systemSources), secondSources.contains(.coreBluetooth) == false,
+                      firstSources == [.coreBluetooth] {
+                systemKey = sortedKeys[1]
+                bleKey = sortedKeys[0]
+            } else {
+                continue
+            }
+
+            grouped[systemKey, default: []].append(contentsOf: grouped.removeValue(forKey: bleKey) ?? [])
+        }
     }
 
     private func makeDevice(from observations: [BatteryObservation], now: Date) -> DeviceBattery {

@@ -81,9 +81,31 @@ enum BLEConnectedPeripheralRetriever {
     static let batteryService = CBUUID(string: "180F")
 
     static func retrieve(from centralManager: any BLEConnectedPeripheralRetrieving) -> [CBPeripheral] {
-        centralManager
-            .retrieveConnectedPeripherals(withServices: [batteryService])
-            .filter { $0.state == .connected }
+        centralManager.retrieveConnectedPeripherals(withServices: [batteryService])
+    }
+}
+
+enum BLEPeripheralPreparationAction: Equatable {
+    case connect
+    case awaitConnection
+    case discoverBattery
+    case unavailable
+}
+
+enum BLEPeripheralPreparation {
+    static func action(for state: CBPeripheralState) -> BLEPeripheralPreparationAction {
+        switch state {
+        case .disconnected:
+            return .connect
+        case .connecting:
+            return .awaitConnection
+        case .connected:
+            return .discoverBattery
+        case .disconnecting:
+            return .unavailable
+        @unknown default:
+            return .unavailable
+        }
     }
 }
 
@@ -115,14 +137,21 @@ struct BLEPeripheralOperationRegistry<Peripheral> {
         return shouldStartOperation
     }
 
-    mutating func cancel(requestID: UUID) {
+    @discardableResult
+    mutating func cancel(requestID: UUID) -> [Peripheral] {
+        var orphanedPeripherals: [Peripheral] = []
         for identifier in Array(requestIDsByPeripheral.keys) {
             requestIDsByPeripheral[identifier]?.remove(requestID)
             if requestIDsByPeripheral[identifier]?.isEmpty == true {
                 requestIDsByPeripheral.removeValue(forKey: identifier)
+                if activeOperations.remove(identifier) != nil,
+                   let peripheral = peripheralsByIdentifier.removeValue(forKey: identifier) {
+                    orphanedPeripherals.append(peripheral)
+                }
             }
             releaseIfIdle(identifier)
         }
+        return orphanedPeripherals
     }
 
     mutating func complete(identifier: UUID, operationFinished: Bool) -> [UUID]? {
@@ -215,7 +244,7 @@ actor CoreBluetoothCollectionState {
     private var pendingCollections: [UUID: PendingCollection] = [:]
 
     init(
-        timeoutNanoseconds: UInt64 = 2_000_000_000,
+        timeoutNanoseconds: UInt64 = 5_000_000_000,
         epoch: BLEManagerEpoch = BLEManagerEpoch(),
         now: @escaping @Sendable () -> Date = { .now }
     ) {
@@ -401,6 +430,7 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
     private var centralManager: CBCentralManager?
     private var waitingForManager: Set<UUID> = []
     private var peripheralOperations = BLEPeripheralOperationRegistry<CBPeripheral>()
+    private var initiatedConnections: Set<UUID> = []
 
     init(state: CoreBluetoothCollectionState, epoch: BLEManagerEpoch) {
         self.state = state
@@ -425,7 +455,10 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
     func cancel(requestID: UUID) {
         queue.async { [self] in
             waitingForManager.remove(requestID)
-            peripheralOperations.cancel(requestID: requestID)
+            let orphanedPeripherals = peripheralOperations.cancel(requestID: requestID)
+            for peripheral in orphanedPeripherals {
+                cancelOwnedConnection(to: peripheral)
+            }
         }
     }
 
@@ -442,6 +475,7 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
             epoch.advance()
             waitingForManager.removeAll()
             peripheralOperations.invalidateAll()
+            initiatedConnections.removeAll()
             let state = state
             Task {
                 await state.managerDidBecomeUnavailable(
@@ -457,6 +491,9 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
         removeDisconnectedPeripherals()
 
         let peripherals = BLEConnectedPeripheralRetriever.retrieve(from: centralManager)
+        SystemLogging.coreBluetooth.info(
+            "Retrieved \(peripherals.count, privacy: .public) battery-service peripherals"
+        )
 
         let devices = peripherals.map { peripheral in
             BLEDeviceReading(
@@ -476,7 +513,17 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
             )
             guard shouldStartOperation else { continue }
             peripheral.delegate = self
-            discoverBatteryLevel(on: peripheral)
+            switch BLEPeripheralPreparation.action(for: peripheral.state) {
+            case .connect:
+                initiatedConnections.insert(peripheral.identifier)
+                centralManager.connect(peripheral, options: nil)
+            case .awaitConnection:
+                break
+            case .discoverBattery:
+                discoverBatteryLevel(on: peripheral)
+            case .unavailable:
+                completeRequests(for: peripheral, batteryLevel: nil)
+            }
         }
     }
 
@@ -528,6 +575,9 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
                   identifier: peripheral.identifier,
                   operationFinished: operationFinished
               ) else { return }
+        if operationFinished {
+            cancelOwnedConnection(to: peripheral)
+        }
         let reading = BLEDeviceReading(
             identifier: peripheral.identifier,
             name: peripheral.name ?? peripheral.identifier.uuidString,
@@ -544,7 +594,7 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
     private func removeDisconnectedPeripherals() {
         for identifier in peripheralOperations.retainedIdentifiers {
             guard let peripheral = peripheralOperations.peripheral(for: identifier),
-                  peripheral.state != .connected else { continue }
+                  peripheral.state == .disconnecting else { continue }
             let requestIDs = peripheralOperations.invalidate(identifier: identifier)
             let reading = BLEDeviceReading(
                 identifier: identifier,
@@ -562,6 +612,12 @@ private final class CoreBluetoothDelegateBridge: NSObject, BLECollectionBridging
 
     private func isCurrent(_ peripheral: CBPeripheral) -> Bool {
         peripheralOperations.peripheral(for: peripheral.identifier) === peripheral
+    }
+
+    private func cancelOwnedConnection(to peripheral: CBPeripheral) {
+        guard initiatedConnections.remove(peripheral.identifier) != nil else { return }
+        guard peripheral.state == .connected || peripheral.state == .connecting else { return }
+        centralManager?.cancelPeripheralConnection(peripheral)
     }
 
     private func resolve(
@@ -605,6 +661,7 @@ extension CoreBluetoothDelegateBridge: CBCentralManagerDelegate {
             epoch.advance()
             waitingForManager.removeAll()
             peripheralOperations.invalidateAll()
+            initiatedConnections.removeAll()
             let state = state
             Task {
                 await state.managerDidBecomeUnavailable(
@@ -617,10 +674,40 @@ extension CoreBluetoothDelegateBridge: CBCentralManagerDelegate {
 
     func centralManager(
         _ central: CBCentralManager,
+        didConnect peripheral: CBPeripheral
+    ) {
+        guard isCurrent(peripheral) else {
+            if initiatedConnections.remove(peripheral.identifier) != nil {
+                central.cancelPeripheralConnection(peripheral)
+            }
+            return
+        }
+        peripheral.delegate = self
+        discoverBatteryLevel(on: peripheral)
+    }
+
+    func centralManager(
+        _ central: CBCentralManager,
+        didFailToConnect peripheral: CBPeripheral,
+        error: Error?
+    ) {
+        guard isCurrent(peripheral) else { return }
+        initiatedConnections.remove(peripheral.identifier)
+        if let error {
+            SystemLogging.coreBluetooth.error(
+                "Peripheral connection failed: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+        completeRequests(for: peripheral, batteryLevel: nil)
+    }
+
+    func centralManager(
+        _ central: CBCentralManager,
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?
     ) {
         guard isCurrent(peripheral) else { return }
+        initiatedConnections.remove(peripheral.identifier)
         if let error {
             SystemLogging.coreBluetooth.error(
                 "Peripheral disconnected with error: \(error.localizedDescription, privacy: .public)"
@@ -695,6 +782,11 @@ extension CoreBluetoothDelegateBridge: CBPeripheralDelegate {
             )
         }
         let level = error == nil ? characteristic.value.flatMap(Self.batteryLevel(from:)) : nil
+        if let level {
+            SystemLogging.coreBluetooth.info(
+                "Read battery level \(level, privacy: .public) for \(peripheral.name ?? peripheral.identifier.uuidString, privacy: .public)"
+            )
+        }
         completeRequests(for: peripheral, batteryLevel: level)
     }
 }

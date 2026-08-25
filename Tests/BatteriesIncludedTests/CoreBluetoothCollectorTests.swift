@@ -533,14 +533,32 @@ final class CoreBluetoothCollectorTests: XCTestCase {
         )
     }
 
-    func testNativeRetrievalUsesBatteryServiceWithoutConnectionRequest() {
+    func testNativeRetrievalUsesBatteryService() {
         let central = TestBLECentralRetriever()
 
         let peripherals = BLEConnectedPeripheralRetriever.retrieve(from: central)
 
         XCTAssertTrue(peripherals.isEmpty)
         XCTAssertEqual(central.retrievedServiceUUIDs, [["180F"]])
-        XCTAssertEqual(central.connectionRequestCount, 0)
+    }
+
+    func testPeripheralPreparationConnectsDisconnectedCandidateBeforeDiscovery() {
+        XCTAssertEqual(
+            BLEPeripheralPreparation.action(for: .disconnected),
+            .connect
+        )
+        XCTAssertEqual(
+            BLEPeripheralPreparation.action(for: .connected),
+            .discoverBattery
+        )
+        XCTAssertEqual(
+            BLEPeripheralPreparation.action(for: .connecting),
+            .awaitConnection
+        )
+        XCTAssertEqual(
+            BLEPeripheralPreparation.action(for: .disconnecting),
+            .unavailable
+        )
     }
 
     func testPeripheralRegistryCoalescesOverlapAndReleasesWhenIdle() {
@@ -580,6 +598,19 @@ final class CoreBluetoothCollectorTests: XCTestCase {
             )
         )
         XCTAssertEqual(registry.invalidate(identifier: peripheralID), [disconnectRequest])
+        XCTAssertTrue(registry.retainedIdentifiers.isEmpty)
+    }
+
+    func testPeripheralRegistryReleasesOperationWhenLastRequestIsCancelled() {
+        var registry = BLEPeripheralOperationRegistry<String>()
+        let peripheralID = UUID()
+        let requestID = UUID()
+
+        XCTAssertTrue(
+            registry.attach("Peripheral", identifier: peripheralID, requestID: requestID)
+        )
+
+        XCTAssertEqual(registry.cancel(requestID: requestID), ["Peripheral"])
         XCTAssertTrue(registry.retainedIdentifiers.isEmpty)
     }
 
@@ -653,7 +684,6 @@ private extension NSLock {
 
 private final class TestBLECentralRetriever: BLEConnectedPeripheralRetrieving {
     private(set) var retrievedServiceUUIDs: [[String]] = []
-    private(set) var connectionRequestCount = 0
 
     func retrieveConnectedPeripherals(withServices serviceUUIDs: [CBUUID]) -> [CBPeripheral] {
         retrievedServiceUUIDs.append(serviceUUIDs.map(\.uuidString))
