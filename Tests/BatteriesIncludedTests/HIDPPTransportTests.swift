@@ -96,6 +96,53 @@ final class HIDPPTransportTests: XCTestCase {
         XCTAssertEqual(pendingRequestCount, 0)
     }
 
+    func testLateResponseAfterCancellationCannotCompleteSameSignatureSuccessor() async throws {
+        let io = FakeHIDPPDeviceIO()
+        let transport = HIDPPTransport(io: io, timeout: .seconds(1))
+        let request = try packet(featureIndex: 7)
+
+        let firstTask = Task { try await transport.send(request) }
+        _ = await io.waitForWrite(number: 1)
+        let secondTask = Task { try await transport.send(request) }
+        await waitForPendingRequestCount(2, in: transport)
+
+        firstTask.cancel()
+        await assertTaskIsCancelled(firstTask)
+        let lateFirstResponse = [UInt8(0x11), 1, 7, 0x1D, 10] + .init(repeating: 0, count: 15)
+        await transport.receive(lateFirstResponse)
+
+        await assertTask(secondTask, throws: HIDPPError.disconnected)
+        XCTAssertEqual(io.writeCount, 1)
+
+        let recoveredTask = Task { try await transport.send(request) }
+        await waitForPendingRequestCount(1, in: transport)
+        XCTAssertEqual(io.writeCount, 2)
+        let recoveredResponse = [UInt8(0x11), 1, 7, 0x1D, 73] + .init(repeating: 0, count: 15)
+        await transport.receive(recoveredResponse)
+        let receivedResponse = try await recoveredTask.value
+        XCTAssertEqual(receivedResponse, recoveredResponse)
+    }
+
+    func testLateResponseAfterTimeoutCannotCompleteSameSignatureSuccessor() async throws {
+        let io = FakeHIDPPDeviceIO()
+        let transport = HIDPPTransport(io: io, timeout: .milliseconds(10))
+        let request = try packet(featureIndex: 7)
+
+        let firstTask = Task { try await transport.send(request) }
+        _ = await io.waitForWrite(number: 1)
+        let secondTask = Task { try await transport.send(request) }
+        await waitForPendingRequestCount(2, in: transport)
+
+        await assertTask(firstTask, throws: HIDPPError.timeout)
+        let lateFirstResponse = [UInt8(0x11), 1, 7, 0x1D, 10] + .init(repeating: 0, count: 15)
+        await transport.receive(lateFirstResponse)
+
+        await assertTask(secondTask, throws: HIDPPError.disconnected)
+        XCTAssertEqual(io.writeCount, 1)
+        let pendingRequestCount = await transport.pendingRequestCount
+        XCTAssertEqual(pendingRequestCount, 0)
+    }
+
     func testInterfaceRemovalFailsActiveAndQueuedRequests() async throws {
         let io = FakeHIDPPDeviceIO()
         let transport = HIDPPTransport(io: io, timeout: .seconds(1))

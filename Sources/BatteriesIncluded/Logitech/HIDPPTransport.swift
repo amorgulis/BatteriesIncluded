@@ -16,6 +16,7 @@ actor HIDPPTransport: HIDPPRequesting {
     private var nextRequestID: UInt64 = 0
     private var activeRequest: PendingRequest?
     private var queuedRequests: [PendingRequest] = []
+    private var responseTombstones: [HIDPPPacket] = []
     private var timeoutTask: Task<Void, Never>?
     private var isRemoved = false
 
@@ -57,6 +58,13 @@ actor HIDPPTransport: HIDPPRequesting {
     }
 
     func receive(_ report: [UInt8]) {
+        if let tombstoneIndex = responseTombstones.firstIndex(where: {
+            $0.matchesResponse(report) || $0.protocolError(in: report) != nil
+        }) {
+            responseTombstones.remove(at: tombstoneIndex)
+            return
+        }
+
         guard let activeRequest else { return }
 
         if let error = activeRequest.packet.protocolError(in: report) {
@@ -85,6 +93,14 @@ actor HIDPPTransport: HIDPPRequesting {
         guard activeRequest == nil, !isRemoved, !queuedRequests.isEmpty else { return }
 
         let request = queuedRequests.removeFirst()
+        guard !responseTombstones.contains(where: {
+            sharesResponseCorrelation($0, request.packet)
+        }) else {
+            request.continuation.resume(throwing: HIDPPError.disconnected)
+            startNextRequestIfNeeded()
+            return
+        }
+
         activeRequest = request
         do {
             try io.write(request.packet.bytes)
@@ -104,12 +120,14 @@ actor HIDPPTransport: HIDPPRequesting {
     }
 
     private func timeout(requestID: UInt64) {
-        guard activeRequest?.id == requestID else { return }
+        guard let activeRequest, activeRequest.id == requestID else { return }
+        responseTombstones.append(activeRequest.packet)
         finishActive(with: .failure(HIDPPError.timeout))
     }
 
     private func cancel(requestID: UInt64) {
-        if activeRequest?.id == requestID {
+        if let activeRequest, activeRequest.id == requestID {
+            responseTombstones.append(activeRequest.packet)
             finishActive(with: .failure(CancellationError()))
             return
         }
@@ -119,6 +137,10 @@ actor HIDPPTransport: HIDPPRequesting {
         }
         let request = queuedRequests.remove(at: queuedIndex)
         request.continuation.resume(throwing: CancellationError())
+    }
+
+    private func sharesResponseCorrelation(_ first: HIDPPPacket, _ second: HIDPPPacket) -> Bool {
+        first.bytes[1...3].elementsEqual(second.bytes[1...3])
     }
 
     private func finishActive(with result: Result<[UInt8], Error>) {
