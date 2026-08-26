@@ -48,14 +48,21 @@ final class HIDPPPacketTests: XCTestCase {
         )) { XCTAssertEqual($0 as? HIDPPError, .invalidPacket) }
     }
 
+    func testRejectsZeroSoftwareIDReservedForNotifications() {
+        XCTAssertThrowsError(try HIDPPPacket.request(
+            kind: .short, deviceIndex: 1, featureIndex: 0,
+            functionID: 0, softwareID: 0, parameters: []
+        )) { XCTAssertEqual($0 as? HIDPPError, .invalidPacket) }
+    }
+
     func testRejectsParametersThatDoNotFitReport() {
         XCTAssertThrowsError(try HIDPPPacket.request(
             kind: .short, deviceIndex: 1, featureIndex: 0,
-            functionID: 0, softwareID: 0, parameters: [0, 1, 2, 3]
+            functionID: 0, softwareID: 1, parameters: [0, 1, 2, 3]
         )) { XCTAssertEqual($0 as? HIDPPError, .invalidPacket) }
         XCTAssertThrowsError(try HIDPPPacket.request(
             kind: .long, deviceIndex: 1, featureIndex: 0,
-            functionID: 0, softwareID: 0, parameters: .init(repeating: 0, count: 17)
+            functionID: 0, softwareID: 1, parameters: .init(repeating: 0, count: 17)
         )) { XCTAssertEqual($0 as? HIDPPError, .invalidPacket) }
     }
 
@@ -76,6 +83,16 @@ final class HIDPPPacketTests: XCTestCase {
             functionID: 1, softwareID: 0x0D, parameters: []
         )
         let response = [0x11, 1, 0xFF, 0x1D, 7, 0x06] + [UInt8](repeating: 0, count: 14)
+
+        XCTAssertEqual(packet.protocolError(in: response), .invalidFeatureIndex)
+    }
+
+    func testMapsLongProtocolErrorForShortRequest() throws {
+        let packet = try HIDPPPacket.request(
+            kind: .short, deviceIndex: 1, featureIndex: 0,
+            functionID: 0, softwareID: 0x0D, parameters: []
+        )
+        let response = [0x11, 1, 0xFF, 0x0D, 0, 0x06] + [UInt8](repeating: 0, count: 14)
 
         XCTAssertEqual(packet.protocolError(in: response), .invalidFeatureIndex)
     }

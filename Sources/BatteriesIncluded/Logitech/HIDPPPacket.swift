@@ -26,7 +26,7 @@ struct HIDPPPacket: Sendable, Equatable {
         softwareID: UInt8,
         parameters: [UInt8]
     ) throws -> Self {
-        guard functionID < 0x10, softwareID < 0x10,
+        guard functionID < 0x10, softwareID > 0, softwareID < 0x10,
               parameters.count <= kind.length - 4 else {
             throw HIDPPError.invalidPacket
         }
@@ -44,8 +44,8 @@ struct HIDPPPacket: Sendable, Equatable {
     }
 
     func protocolError(in response: [UInt8]) -> HIDPPError? {
-        guard response.count == bytes.count,
-              response[0] == bytes[0],
+        guard response.count == HIDPPReportKind.long.length,
+              response[0] == HIDPPReportKind.long.rawValue,
               response[1] == bytes[1],
               response[2] == 0xFF,
               response[3] == bytes[3],
