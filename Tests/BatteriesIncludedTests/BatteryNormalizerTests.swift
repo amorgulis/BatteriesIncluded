@@ -105,6 +105,15 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result.count, 3)
     }
 
+    func testDoesNotMergeTwoLogitechGroupsWithSameName() {
+        let result = BatteryNormalizer().normalize([
+            observation(id: "hid-1", stableID: "hid-1", name: "MX Keys", source: .logitechHID),
+            observation(id: "hid-2", stableID: "hid-2", name: "MX Keys", source: .logitechHID)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.count, 2)
+    }
+
     func testDoesNotMergeAmbiguousDevicesWithoutStableID() {
         let result = BatteryNormalizer().normalize([
             observation(id: "one", stableID: nil, name: "Headphones"),

@@ -59,11 +59,11 @@ struct BatteryNormalizer: Sendable {
                 grouped[sortedKeys[1], default: []].append(contentsOf:
                     grouped.removeValue(forKey: sortedKeys[0]) ?? []
                 )
-            } else if firstSources == [.logitechHID] {
+            } else if firstSources == [.logitechHID], !secondSources.contains(.logitechHID) {
                 grouped[sortedKeys[1], default: []].append(contentsOf:
                     grouped.removeValue(forKey: sortedKeys[0]) ?? []
                 )
-            } else if secondSources == [.logitechHID] {
+            } else if secondSources == [.logitechHID], !firstSources.contains(.logitechHID) {
                 grouped[sortedKeys[0], default: []].append(contentsOf:
                     grouped.removeValue(forKey: sortedKeys[1]) ?? []
                 )
