@@ -37,9 +37,15 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
         let supportsStateOfCharge: Bool
     }
 
+    private enum UnifiedBatteryCache {
+        case unresolved
+        case unavailable
+        case available(UnifiedBatteryFeature)
+    }
+
     private struct DeviceCache {
         var name: CachedName = .unresolved
-        var unifiedBattery: UnifiedBatteryFeature?
+        var unifiedBattery: UnifiedBatteryCache = .unresolved
         var legacyBatteryIndex: UInt8?
     }
 
@@ -109,34 +115,60 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
             break
         }
 
-        let name: String?
         do {
             guard let featureIndex = try await resolveFeature(Feature.deviceName, deviceIndex: deviceIndex) else {
-                name = nil
-                caches[deviceIndex, default: DeviceCache()].name = .value(nil)
                 return nil
             }
-            let parameters = try await send(
+            guard let nameLength = try await send(
                 deviceIndex: deviceIndex,
                 featureIndex: featureIndex,
                 functionID: 0
-            )
-            name = decodedName(from: parameters)
-        } catch HIDPPError.invalidFeatureIndex {
-            name = nil
-        }
+            ).first, nameLength > 0 else {
+                caches[deviceIndex, default: DeviceCache()].name = .value(nil)
+                return nil
+            }
 
-        caches[deviceIndex, default: DeviceCache()].name = .value(name)
-        return name
+            var nameBytes: [UInt8] = []
+            while nameBytes.count < Int(nameLength) {
+                let parameters = try await send(
+                    deviceIndex: deviceIndex,
+                    featureIndex: featureIndex,
+                    functionID: 1,
+                    parameters: [UInt8(nameBytes.count)]
+                )
+                let remaining = Int(nameLength) - nameBytes.count
+                let expectedChunkLength = min(remaining, parameters.count)
+                let chunk = Array(parameters.prefix(expectedChunkLength))
+                guard chunk.count == expectedChunkLength, !chunk.contains(0) else {
+                    caches[deviceIndex, default: DeviceCache()].name = .value(nil)
+                    return nil
+                }
+                nameBytes += chunk
+            }
+
+            guard let name = decodedName(from: nameBytes) else {
+                caches[deviceIndex, default: DeviceCache()].name = .value(nil)
+                return nil
+            }
+            caches[deviceIndex, default: DeviceCache()].name = .value(name)
+            return name
+        } catch HIDPPError.invalidFeatureIndex {
+            invalidate(deviceIndex: deviceIndex)
+            return nil
+        }
     }
 
     private func unifiedBatteryPercentage(deviceIndex: UInt8) async throws -> Int? {
         let feature: UnifiedBatteryFeature
-        if let cachedFeature = caches[deviceIndex]?.unifiedBattery {
+        switch caches[deviceIndex, default: DeviceCache()].unifiedBattery {
+        case .available(let cachedFeature):
             feature = cachedFeature
-        } else {
+        case .unavailable:
+            return nil
+        case .unresolved:
             do {
                 guard let featureIndex = try await resolveFeature(Feature.unifiedBattery, deviceIndex: deviceIndex) else {
+                    caches[deviceIndex, default: DeviceCache()].unifiedBattery = .unavailable
                     return nil
                 }
                 let capabilities = try await send(
@@ -151,7 +183,7 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
                     index: featureIndex,
                     supportsStateOfCharge: capabilities[1] & 0x02 != 0
                 )
-                caches[deviceIndex, default: DeviceCache()].unifiedBattery = feature
+                caches[deviceIndex, default: DeviceCache()].unifiedBattery = .available(feature)
             } catch HIDPPError.invalidFeatureIndex {
                 invalidate(deviceIndex: deviceIndex)
                 return nil
@@ -164,13 +196,13 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
                 featureIndex: feature.index,
                 functionID: 1
             )
-            guard let level = status.first else {
+            guard status.count >= 2 else {
                 return nil
             }
             if feature.supportsStateOfCharge {
-                return level <= 100 ? Int(level) : nil
+                return status[0] <= 100 ? Int(status[0]) : nil
             }
-            return switch level {
+            return switch status[1] {
             case 1: 10
             case 2: 30
             case 4: 60
@@ -195,7 +227,7 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
                 featureIndex = resolvedFeatureIndex
                 caches[deviceIndex, default: DeviceCache()].legacyBatteryIndex = featureIndex
             } catch HIDPPError.invalidFeatureIndex {
-                caches[deviceIndex, default: DeviceCache()].legacyBatteryIndex = nil
+                invalidate(deviceIndex: deviceIndex)
                 return nil
             }
         }
@@ -217,16 +249,20 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
     }
 
     private func resolveFeature(_ featureID: UInt16, deviceIndex: UInt8) async throws -> UInt8? {
-        let parameters = try await send(
-            deviceIndex: deviceIndex,
-            featureIndex: 0,
-            functionID: 0,
-            parameters: [UInt8(featureID >> 8), UInt8(featureID & 0xFF)]
-        )
-        guard let featureIndex = parameters.first, featureIndex != 0 else {
+        do {
+            let parameters = try await send(
+                deviceIndex: deviceIndex,
+                featureIndex: 0,
+                functionID: 0,
+                parameters: [UInt8(featureID >> 8), UInt8(featureID & 0xFF)]
+            )
+            guard let featureIndex = parameters.first, featureIndex != 0 else {
+                return nil
+            }
+            return featureIndex
+        } catch HIDPPError.invalidFeatureIndex {
             return nil
         }
-        return featureIndex
     }
 
     private func send(
@@ -236,7 +272,7 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
         parameters: [UInt8] = []
     ) async throws -> [UInt8] {
         let packet = try HIDPPPacket.request(
-            kind: .short,
+            kind: .long,
             deviceIndex: deviceIndex,
             featureIndex: featureIndex,
             functionID: functionID,
@@ -254,8 +290,7 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
     }
 
     private func decodedName(from parameters: [UInt8]) -> String? {
-        let bytes = parameters.prefix { $0 != 0 }
-        guard let name = String(bytes: bytes, encoding: .utf8)?
+        guard let name = String(bytes: parameters, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !name.isEmpty else {
             return nil
