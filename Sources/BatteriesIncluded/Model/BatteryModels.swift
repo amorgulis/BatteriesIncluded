@@ -22,6 +22,7 @@ enum BatterySource: Int, Sendable, Equatable {
     case systemProfiler = -1
     case system = 0
     case coreBluetooth = 1
+    case logitechHID = 2
 }
 enum DeviceCategory: Sendable, Equatable { case headphones, mouse, keyboard, trackpad, gameController, other }
 enum BluetoothAvailability: Sendable, Equatable { case available, poweredOff, permissionDenied, unavailable }

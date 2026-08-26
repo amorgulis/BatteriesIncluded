@@ -49,21 +49,27 @@ struct BatteryNormalizer: Sendable {
             let secondSources = Set(second.map(\.source))
             let systemSources: Set<BatterySource> = [.system, .systemProfiler]
 
-            let systemKey: String
-            let bleKey: String
             if !firstSources.isDisjoint(with: systemSources), firstSources.contains(.coreBluetooth) == false,
                secondSources == [.coreBluetooth] {
-                systemKey = sortedKeys[0]
-                bleKey = sortedKeys[1]
+                grouped[sortedKeys[0], default: []].append(contentsOf:
+                    grouped.removeValue(forKey: sortedKeys[1]) ?? []
+                )
             } else if !secondSources.isDisjoint(with: systemSources), secondSources.contains(.coreBluetooth) == false,
                       firstSources == [.coreBluetooth] {
-                systemKey = sortedKeys[1]
-                bleKey = sortedKeys[0]
+                grouped[sortedKeys[1], default: []].append(contentsOf:
+                    grouped.removeValue(forKey: sortedKeys[0]) ?? []
+                )
+            } else if firstSources == [.logitechHID] {
+                grouped[sortedKeys[1], default: []].append(contentsOf:
+                    grouped.removeValue(forKey: sortedKeys[0]) ?? []
+                )
+            } else if secondSources == [.logitechHID] {
+                grouped[sortedKeys[0], default: []].append(contentsOf:
+                    grouped.removeValue(forKey: sortedKeys[1]) ?? []
+                )
             } else {
                 continue
             }
-
-            grouped[systemKey, default: []].append(contentsOf: grouped.removeValue(forKey: bleKey) ?? [])
         }
     }
 

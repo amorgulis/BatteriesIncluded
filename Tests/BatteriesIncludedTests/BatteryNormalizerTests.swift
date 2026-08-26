@@ -6,10 +6,11 @@ final class BatteryNormalizerTests: XCTestCase {
         id: String = "device-1", stableID: String? = "stable-1",
         name: String = "AirPods Pro", connected: Bool = true,
         component: BatteryComponent = .whole, percentage: Int? = 50,
-        source: BatterySource = .system, age: TimeInterval = 0
+        source: BatterySource = .system, category: DeviceCategory? = .headphones,
+        age: TimeInterval = 0
     ) -> BatteryObservation {
         .init(sourceID: id, stableID: stableID, name: name, isConnected: connected,
-              category: .headphones, component: component, percentage: percentage,
+              category: category, component: component, percentage: percentage,
               source: source, observedAt: Date(timeIntervalSince1970: 1_000 - age))
     }
 
@@ -71,6 +72,39 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result[0].levels[0].percentage, 80)
     }
 
+    func testPrefersFreshLogitechHIDReading() {
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 83, source: .coreBluetooth),
+            observation(percentage: 61, source: .logitechHID)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.single?.levels.single?.percentage, 61)
+    }
+
+    func testMergesUniqueLogitechGroupAndPreservesSystemIdentity() {
+        let result = BatteryNormalizer().normalize([
+            observation(id: "AA:BB", stableID: "AA:BB", name: "MX Master 3S",
+                        percentage: nil, source: .system, category: .mouse),
+            observation(id: "receiver:1", stableID: "receiver:1", name: "MX Master 3S",
+                        percentage: 61, source: .logitechHID, category: nil)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.single?.id, "stable:AA:BB")
+        XCTAssertEqual(result.single?.category, .mouse)
+        XCTAssertEqual(result.single?.levels.single?.percentage, 61)
+    }
+
+    func testDoesNotMergeAmbiguousLogitechName() {
+        let result = BatteryNormalizer().normalize([
+            observation(id: "system", stableID: "system", name: "MX Keys", source: .system),
+            observation(id: "hid-1", stableID: "hid-1", name: "MX Keys", source: .logitechHID),
+            observation(id: "hid-2", stableID: "hid-2", name: "MX Keys", source: .logitechHID)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.count, 3)
+    }
+
     func testDoesNotMergeAmbiguousDevicesWithoutStableID() {
         let result = BatteryNormalizer().normalize([
             observation(id: "one", stableID: nil, name: "Headphones"),
@@ -107,5 +141,11 @@ final class BatteryNormalizerTests: XCTestCase {
             observation(connected: false)
         ], now: Date(timeIntervalSince1970: 1_000))
         XCTAssertTrue(result.isEmpty)
+    }
+}
+
+private extension Array {
+    var single: Element? {
+        count == 1 ? first : nil
     }
 }
