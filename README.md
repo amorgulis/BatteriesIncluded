@@ -46,5 +46,8 @@ stapling produces the final distributable archive containing the notarization
 ticket.
 
 Battery support is best-effort: macOS and the connected peripheral must expose
-a battery value. Connected devices without a readable value remain visible as
-`Battery unavailable`.
+a battery value. In addition to macOS Bluetooth sources, the app reads native
+Logitech HID++ battery data from directly connected devices and devices paired
+through Unifying, Bolt, and Lightspeed USB receivers. Known devices that expose
+only battery voltage, rather than a protocol-defined percentage or level,
+remain visible as `Battery unavailable`.

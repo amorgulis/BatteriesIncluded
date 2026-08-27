@@ -3,7 +3,8 @@ import SwiftUI
 @main
 struct BatteriesIncludedApp: App {
     @State private var monitor = DeviceMonitor(collectors: [
-        SystemBluetoothCollector(), CoreBluetoothCollector(), SystemProfilerCollector()
+        SystemBluetoothCollector(), CoreBluetoothCollector(),
+        LogitechHIDCollector(), SystemProfilerCollector()
     ])
 
     var body: some Scene {
