@@ -16,6 +16,12 @@ struct LogitechHIDInterfaceDescriptor: Sendable, Equatable, Identifiable {
     let inputReportIDs: Set<UInt8>
     let outputReportIDs: Set<UInt8>
 
+    var isReceiverInterface: Bool {
+        productName?.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).contains {
+            $0.caseInsensitiveCompare("receiver") == .orderedSame
+        } ?? false
+    }
+
     func identity(deviceIndex: UInt8) -> HIDPPFallbackIdentity {
         let isReceiverChild = deviceIndex != 0xFF
         let directStableID = directStableID

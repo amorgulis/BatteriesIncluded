@@ -24,6 +24,7 @@ protocol HIDPPBatteryReading: Sendable {
         deviceIndex: UInt8,
         fallbackIdentity: HIDPPFallbackIdentity
     ) async throws -> HIDPPDeviceReading?
+    func invalidate(deviceIndex: UInt8) async
 }
 
 actor HIDPPBatteryReader: HIDPPBatteryReading {

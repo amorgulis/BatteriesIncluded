@@ -98,6 +98,82 @@ final class LogitechHIDCollectorTests: XCTestCase {
         XCTAssertTrue(snapshot.observations.isEmpty)
     }
 
+    func testCollectSuppressesNilPercentageDirectReadingFromReceiverInterface() async {
+        let transport = makeTransport()
+        let interface = makeInterface(
+            id: "receiver",
+            productName: "Logitech USB RECEIVER",
+            transport: transport
+        )
+        let reader = ScriptedBatteryReader(results: [
+            0xFF: .success(reading(
+                index: 0xFF,
+                stableID: "receiver-interface",
+                name: "Logitech USB RECEIVER",
+                percentage: nil
+            ))
+        ])
+        let collector = LogitechHIDCollector(
+            discovery: FakeLogitechHIDDiscovery(snapshots: [[interface]]),
+            readerFactory: { _ in reader }
+        )
+
+        let snapshot = await collector.collect()
+
+        XCTAssertTrue(snapshot.observations.isEmpty)
+    }
+
+    func testCollectPreservesDirectBatteryReadingFromReceiverInterface() async {
+        let transport = makeTransport()
+        let interface = makeInterface(
+            id: "receiver",
+            productName: "Logitech USB Receiver",
+            transport: transport
+        )
+        let reader = ScriptedBatteryReader(results: [
+            0xFF: .success(reading(
+                index: 0xFF,
+                stableID: "receiver-interface",
+                name: "Receiver Battery",
+                percentage: 90
+            ))
+        ])
+        let collector = LogitechHIDCollector(
+            discovery: FakeLogitechHIDDiscovery(snapshots: [[interface]]),
+            readerFactory: { _ in reader }
+        )
+
+        let snapshot = await collector.collect()
+
+        XCTAssertEqual(snapshot.observations.map(\.percentage), [90])
+    }
+
+    func testCollectPreservesNilPercentageDirectReadingWithoutReceiverProductToken() async {
+        let transport = makeTransport()
+        let interface = makeInterface(
+            id: "direct",
+            productName: "Receiverish Voltage Device",
+            transport: transport
+        )
+        let reader = ScriptedBatteryReader(results: [
+            0xFF: .success(reading(
+                index: 0xFF,
+                stableID: "direct-voltage-only",
+                name: "Receiverish Voltage Device",
+                percentage: nil
+            ))
+        ])
+        let collector = LogitechHIDCollector(
+            discovery: FakeLogitechHIDDiscovery(snapshots: [[interface]]),
+            readerFactory: { _ in reader }
+        )
+
+        let snapshot = await collector.collect()
+
+        XCTAssertEqual(snapshot.observations.map(\.stableID), ["direct-voltage-only"])
+        XCTAssertNil(snapshot.observations.first?.percentage)
+    }
+
     func testCollectReusesReadersForUnchangedInterfacesAndEvictsRemovedOrReplacedInterfaces() async {
         let firstTransport = makeTransport()
         let replacementTransport = makeTransport()
@@ -129,15 +205,45 @@ final class LogitechHIDCollectorTests: XCTestCase {
         XCTAssertEqual(factory.creationCount, 3)
     }
 
+    func testCollectInvalidatesFailedTargetCacheAndContinuesHealthySlotsOnReusedReader() async {
+        let transport = makeTransport()
+        let interface = makeInterface(id: "receiver", transport: transport)
+        let reader = CachingFailureBatteryReader()
+        let collector = LogitechHIDCollector(
+            discovery: FakeLogitechHIDDiscovery(snapshots: [[interface]]),
+            readerFactory: { _ in reader }
+        )
+
+        let initialSnapshot = await collector.collect()
+        let failedRefreshSnapshot = await collector.collect()
+        let recoveredSnapshot = await collector.collect()
+        let invalidatedIndexes = await reader.invalidatedIndexes
+
+        XCTAssertEqual(initialSnapshot.observations.map(\.name), ["Healthy Device", "Old Device"])
+        XCTAssertEqual(failedRefreshSnapshot.observations.map(\.name), ["Healthy Device"])
+        XCTAssertEqual(recoveredSnapshot.observations.map(\.name), ["Fresh Device", "Healthy Device"])
+        XCTAssertEqual(invalidatedIndexes, [1])
+    }
+
     private func makeTransport() -> HIDPPTransport {
         HIDPPTransport(io: NoopHIDPPDeviceIO())
     }
 
-    private func makeInterface(id: String, transport: HIDPPTransport) -> LogitechHIDInterface {
-        LogitechHIDInterface(descriptor: makeDescriptor(id: id), transport: transport)
+    private func makeInterface(
+        id: String,
+        productName: String? = nil,
+        transport: HIDPPTransport
+    ) -> LogitechHIDInterface {
+        LogitechHIDInterface(
+            descriptor: makeDescriptor(id: id, productName: productName),
+            transport: transport
+        )
     }
 
-    private func makeDescriptor(id: String) -> LogitechHIDInterfaceDescriptor {
+    private func makeDescriptor(
+        id: String,
+        productName: String? = nil
+    ) -> LogitechHIDInterfaceDescriptor {
         LogitechHIDInterfaceDescriptor(
             id: id,
             physicalKey: "physical-\(id)",
@@ -146,7 +252,7 @@ final class LogitechHIDCollectorTests: XCTestCase {
             serialNumber: id,
             locationID: nil,
             transport: "USB",
-            productName: "Receiver \(id)",
+            productName: productName ?? "Fixture \(id)",
             primaryUsagePage: 1,
             primaryUsage: 2,
             inputReportIDs: [0x11],
@@ -213,6 +319,55 @@ private actor ScriptedBatteryReader: HIDPPBatteryReading {
             await firstRead?()
         }
         return try results[deviceIndex, default: .success(nil)].get()
+    }
+
+    func invalidate(deviceIndex: UInt8) {}
+}
+
+private actor CachingFailureBatteryReader: HIDPPBatteryReading {
+    private var slotOneAttempt = 0
+    private var cachedSlotOneName: String?
+    private var invalidations: [UInt8] = []
+
+    var invalidatedIndexes: [UInt8] { invalidations }
+
+    func read(
+        deviceIndex: UInt8,
+        fallbackIdentity: HIDPPFallbackIdentity
+    ) throws -> HIDPPDeviceReading? {
+        switch deviceIndex {
+        case 1:
+            slotOneAttempt += 1
+            if slotOneAttempt == 2 {
+                throw FakeError.unresponsive
+            }
+            let name = cachedSlotOneName ?? (slotOneAttempt == 1 ? "Old Device" : "Fresh Device")
+            cachedSlotOneName = name
+            return HIDPPDeviceReading(
+                deviceIndex: 1,
+                stableID: "receiver:1",
+                name: name,
+                category: .mouse,
+                percentage: 50
+            )
+        case 2:
+            return HIDPPDeviceReading(
+                deviceIndex: 2,
+                stableID: "receiver:2",
+                name: "Healthy Device",
+                category: .mouse,
+                percentage: 75
+            )
+        default:
+            return nil
+        }
+    }
+
+    func invalidate(deviceIndex: UInt8) {
+        invalidations.append(deviceIndex)
+        if deviceIndex == 1 {
+            cachedSlotOneName = nil
+        }
     }
 }
 

@@ -117,9 +117,15 @@ actor LogitechHIDCollector: BatteryCollecting {
                     deviceIndex: deviceIndex,
                     fallbackIdentity: descriptor.identity(deviceIndex: deviceIndex)
                 ) {
+                    if deviceIndex == 0xFF,
+                       descriptor.isReceiverInterface,
+                       reading.percentage == nil {
+                        continue
+                    }
                     readings.append(reading)
                 }
             } catch {
+                await reader.invalidate(deviceIndex: deviceIndex)
                 continue
             }
         }
