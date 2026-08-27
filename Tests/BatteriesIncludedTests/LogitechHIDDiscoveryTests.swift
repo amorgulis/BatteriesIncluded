@@ -74,6 +74,7 @@ final class LogitechHIDDiscoveryTests: XCTestCase {
         let descriptor = fixture(productName: "USB Receiver")
 
         XCTAssertNil(descriptor.identity(deviceIndex: 1).name)
+        XCTAssertNil(descriptor.identity(deviceIndex: 1).category)
         XCTAssertTrue(descriptor.identity(deviceIndex: 1).isReceiverChild)
     }
 

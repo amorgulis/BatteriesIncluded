@@ -19,22 +19,162 @@ enum IOKitHIDDeviceError: Error, CustomStringConvertible {
     }
 }
 
+final class IOKitHIDLifecycle: @unchecked Sendable {
+    enum Phase: Equatable {
+        case idle
+        case opening
+        case open
+        case cancelling
+        case cancelled
+    }
+
+    private let lock = NSLock()
+    private var storedPhase: Phase = .idle
+
+    var phase: Phase {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedPhase
+    }
+
+    func performOpen(_ setupAndActivation: () throws -> Void) throws {
+        lock.lock()
+        guard storedPhase == .idle else {
+            lock.unlock()
+            throw IOKitHIDDeviceError.alreadyOpen
+        }
+        storedPhase = .opening
+
+        do {
+            try setupAndActivation()
+            storedPhase = .open
+            lock.unlock()
+        } catch {
+            storedPhase = .cancelled
+            lock.unlock()
+            throw error
+        }
+    }
+
+    func synchronizeWithOpening() {
+        lock.lock()
+        lock.unlock()
+    }
+
+    func withOpen<T>(_ body: () -> T) -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard storedPhase == .open else { return nil }
+        return body()
+    }
+
+    func beginCancellation() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard storedPhase == .open else { return false }
+        storedPhase = .cancelling
+        return true
+    }
+
+    func finishCancellation() {
+        lock.lock()
+        if storedPhase == .cancelling {
+            storedPhase = .cancelled
+        }
+        lock.unlock()
+    }
+}
+
+enum IOKitHIDCancellationReason {
+    case explicitClose
+    case physicalRemoval
+}
+
+final class IOKitHIDCancellationCoordinator: @unchecked Sendable {
+    private let lifecycle: IOKitHIDLifecycle
+    private let notifyTransport: @Sendable () -> Void
+    private let notifyOwnerRemoval: @Sendable () -> Void
+    private let cancelNativeDevice: @Sendable () -> Void
+
+    init(
+        lifecycle: IOKitHIDLifecycle,
+        notifyTransport: @escaping @Sendable () -> Void,
+        notifyOwnerRemoval: @escaping @Sendable () -> Void,
+        cancelNativeDevice: @escaping @Sendable () -> Void
+    ) {
+        self.lifecycle = lifecycle
+        self.notifyTransport = notifyTransport
+        self.notifyOwnerRemoval = notifyOwnerRemoval
+        self.cancelNativeDevice = cancelNativeDevice
+    }
+
+    @discardableResult
+    func cancel(reason: IOKitHIDCancellationReason) -> Bool {
+        guard lifecycle.beginCancellation() else { return false }
+
+        notifyTransport()
+        if reason == .physicalRemoval {
+            notifyOwnerRemoval()
+        }
+        cancelNativeDevice()
+        return true
+    }
+}
+
+enum IOKitHIDRetainedContext {
+    static func retain<T: AnyObject>(_ value: T) -> UnsafeMutableRawPointer {
+        Unmanaged.passRetained(value).toOpaque()
+    }
+
+    static func borrow<T: AnyObject>(
+        _ context: UnsafeMutableRawPointer,
+        as type: T.Type
+    ) -> T {
+        Unmanaged<T>.fromOpaque(context).takeUnretainedValue()
+    }
+
+    static func consume<T: AnyObject>(
+        _ context: UnsafeMutableRawPointer,
+        as type: T.Type
+    ) -> T {
+        Unmanaged<T>.fromOpaque(context).takeRetainedValue()
+    }
+}
+
 final class IOKitHIDDevice: HIDPPDeviceIO, @unchecked Sendable {
     private final class CallbackState: @unchecked Sendable {
         let device: IOHIDDevice
         let buffer: UnsafeMutablePointer<UInt8>
         let bufferSize: Int
 
-        private let lock = NSLock()
+        private let lifecycle: IOKitHIDLifecycle
         private weak var transport: HIDPPTransport?
-        private var isActive = true
+        private let cancellation: IOKitHIDCancellationCoordinator
 
-        init(device: IOHIDDevice, bufferSize: Int, transport: HIDPPTransport) {
+        init(
+            device: IOHIDDevice,
+            bufferSize: Int,
+            transport: HIDPPTransport,
+            lifecycle: IOKitHIDLifecycle,
+            onRemoval: @escaping @Sendable () -> Void
+        ) {
             self.device = device
             self.bufferSize = bufferSize
             self.buffer = .allocate(capacity: bufferSize)
             self.buffer.initialize(repeating: 0, count: bufferSize)
+            self.lifecycle = lifecycle
             self.transport = transport
+            self.cancellation = IOKitHIDCancellationCoordinator(
+                lifecycle: lifecycle,
+                notifyTransport: { [weak transport] in
+                    guard let transport else { return }
+                    Task { await transport.interfaceRemoved() }
+                },
+                notifyOwnerRemoval: onRemoval,
+                cancelNativeDevice: {
+                    IOHIDDeviceCancel(device)
+                }
+            )
         }
 
         deinit {
@@ -49,42 +189,28 @@ final class IOKitHIDDevice: HIDPPDeviceIO, @unchecked Sendable {
             // reportID argument is metadata, so prepending it would duplicate
             // the leading HID++ report-ID byte.
             let bytes = Array(UnsafeBufferPointer(start: report, count: length))
-            lock.lock()
-            let transport = isActive ? transport : nil
-            lock.unlock()
+            let activeTransport: HIDPPTransport? = lifecycle.withOpen {
+                self.transport
+            } ?? nil
 
-            guard let transport else { return }
-            Task { await transport.receive(bytes) }
+            guard let activeTransport else { return }
+            Task { await activeTransport.receive(bytes) }
         }
 
-        func remove() {
-            lock.lock()
-            guard isActive else {
-                lock.unlock()
-                return
-            }
-            isActive = false
-            let transport = transport
-            lock.unlock()
-
-            guard let transport else { return }
-            Task { await transport.interfaceRemoved() }
+        func cancel(reason: IOKitHIDCancellationReason) {
+            cancellation.cancel(reason: reason)
         }
 
-        func withActiveDevice<T>(_ body: (IOHIDDevice) -> T) -> T? {
-            lock.lock()
-            defer { lock.unlock() }
-            guard isActive else { return nil }
-            return body(device)
+        func finishCancellation() {
+            lifecycle.finishCancellation()
         }
     }
 
     private let device: IOHIDDevice
     private let maxInputReportSize: Int
     private let callbackQueue = DispatchQueue(label: "com.batteriesincluded.logitech-hid.callback")
-    private let lock = NSLock()
-    private var callbackState: CallbackState?
-    private var isClosing = false
+    private let lifecycle = IOKitHIDLifecycle()
+    private weak var callbackState: CallbackState?
 
     init(device: IOHIDDevice, maxInputReportSize: Int) {
         self.device = device
@@ -95,58 +221,59 @@ final class IOKitHIDDevice: HIDPPDeviceIO, @unchecked Sendable {
         close()
     }
 
-    func open(transport: HIDPPTransport) throws {
-        lock.lock()
-        guard callbackState == nil, !isClosing else {
-            lock.unlock()
-            throw IOKitHIDDeviceError.alreadyOpen
-        }
+    func open(
+        transport: HIDPPTransport,
+        onRemoval: @escaping @Sendable () -> Void
+    ) throws {
+        try lifecycle.performOpen {
+            let result = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
+            guard result == kIOReturnSuccess else {
+                throw IOKitHIDDeviceError.openFailed(result)
+            }
 
-        let result = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
-        guard result == kIOReturnSuccess else {
-            lock.unlock()
-            throw IOKitHIDDeviceError.openFailed(result)
-        }
+            let state = CallbackState(
+                device: device,
+                bufferSize: maxInputReportSize,
+                transport: transport,
+                lifecycle: lifecycle,
+                onRemoval: onRemoval
+            )
+            callbackState = state
+            let context = IOKitHIDRetainedContext.retain(state)
 
-        let state = CallbackState(
-            device: device,
-            bufferSize: maxInputReportSize,
-            transport: transport
-        )
-        callbackState = state
-        let context = Unmanaged.passRetained(state).toOpaque()
-        lock.unlock()
-
-        IOHIDDeviceSetDispatchQueue(device, callbackQueue)
-        IOHIDDeviceRegisterInputReportCallback(
-            device,
-            state.buffer,
-            state.bufferSize,
-            { context, result, _, _, _, report, reportLength in
-                guard result == kIOReturnSuccess, let context else { return }
-                Unmanaged<CallbackState>
-                    .fromOpaque(context)
-                    .takeUnretainedValue()
-                    .receive(report: report, length: reportLength)
-            },
-            context
-        )
-        IOHIDDeviceRegisterRemovalCallback(
-            device,
-            { context, _, _ in
-                guard let context else { return }
-                Unmanaged<CallbackState>
-                    .fromOpaque(context)
-                    .takeUnretainedValue()
-                    .remove()
-            },
-            context
-        )
-        IOHIDDeviceSetCancelHandler(device) {
-            let state = Unmanaged<CallbackState>.fromOpaque(context).takeRetainedValue()
-            _ = IOHIDDeviceClose(state.device, IOOptionBits(kIOHIDOptionsTypeNone))
+            IOHIDDeviceSetDispatchQueue(device, callbackQueue)
+            IOHIDDeviceRegisterInputReportCallback(
+                device,
+                state.buffer,
+                state.bufferSize,
+                { context, result, _, _, _, report, reportLength in
+                    guard result == kIOReturnSuccess, let context else { return }
+                    IOKitHIDRetainedContext
+                        .borrow(context, as: CallbackState.self)
+                        .receive(report: report, length: reportLength)
+                },
+                context
+            )
+            IOHIDDeviceRegisterRemovalCallback(
+                device,
+                { context, _, _ in
+                    guard let context else { return }
+                    IOKitHIDRetainedContext
+                        .borrow(context, as: CallbackState.self)
+                        .cancel(reason: .physicalRemoval)
+                },
+                context
+            )
+            IOHIDDeviceSetCancelHandler(device) {
+                let state = IOKitHIDRetainedContext.consume(
+                    context,
+                    as: CallbackState.self
+                )
+                _ = IOHIDDeviceClose(state.device, IOOptionBits(kIOHIDOptionsTypeNone))
+                state.finishCancellation()
+            }
+            IOHIDDeviceActivate(device)
         }
-        IOHIDDeviceActivate(device)
     }
 
     func write(_ report: [UInt8]) throws {
@@ -154,14 +281,7 @@ final class IOKitHIDDevice: HIDPPDeviceIO, @unchecked Sendable {
             throw HIDPPError.invalidPacket
         }
 
-        lock.lock()
-        let state = isClosing ? nil : callbackState
-        lock.unlock()
-        guard let state else {
-            throw HIDPPError.disconnected
-        }
-
-        let result = state.withActiveDevice { device in
+        let result = lifecycle.withOpen {
             report.withUnsafeBufferPointer { buffer in
                 IOHIDDeviceSetReport(
                     device,
@@ -181,15 +301,7 @@ final class IOKitHIDDevice: HIDPPDeviceIO, @unchecked Sendable {
     }
 
     func close() {
-        lock.lock()
-        guard !isClosing, let state = callbackState else {
-            lock.unlock()
-            return
-        }
-        isClosing = true
-        lock.unlock()
-
-        state.remove()
-        IOHIDDeviceCancel(device)
+        lifecycle.synchronizeWithOpening()
+        callbackState?.cancel(reason: .explicitClose)
     }
 }

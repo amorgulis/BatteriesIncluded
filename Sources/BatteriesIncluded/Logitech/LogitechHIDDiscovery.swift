@@ -23,7 +23,7 @@ struct LogitechHIDInterfaceDescriptor: Sendable, Equatable, Identifiable {
         return HIDPPFallbackIdentity(
             stableID: isReceiverChild ? "\(directStableID):device:\(deviceIndex)" : directStableID,
             name: isReceiverChild ? nil : productName?.nilIfEmpty,
-            category: category,
+            category: isReceiverChild ? nil : category,
             isReceiverChild: isReceiverChild
         )
     }
@@ -110,6 +110,18 @@ protocol LogitechHIDDiscovering: Sendable {
     func interfaces() async -> [LogitechHIDInterface]
 }
 
+enum LogitechHIDNativeConfiguration {
+    static let managerCreateOptions = IOOptionBits(
+        IOHIDManagerOptions.independentDevices.rawValue
+    )
+    static let managerOpenOptions = IOOptionBits(
+        IOHIDManagerOptions.independentDevices.rawValue
+    )
+    static let managerCloseOptions = IOOptionBits(
+        IOHIDManagerOptions.independentDevices.rawValue
+    )
+}
+
 actor LogitechHIDDiscovery: LogitechHIDDiscovering {
     private struct OpenedInterface {
         let device: IOKitHIDDevice
@@ -123,7 +135,7 @@ actor LogitechHIDDiscovery: LogitechHIDDiscovering {
     init() {
         let manager = IOHIDManagerCreate(
             kCFAllocatorDefault,
-            IOOptionBits(kIOHIDOptionsTypeNone)
+            LogitechHIDNativeConfiguration.managerCreateOptions
         )
         self.manager = manager
         IOHIDManagerSetDeviceMatching(
@@ -132,7 +144,7 @@ actor LogitechHIDDiscovery: LogitechHIDDiscovering {
         )
         self.managerOpenResult = IOHIDManagerOpen(
             manager,
-            IOOptionBits(kIOHIDOptionsTypeNone)
+            LogitechHIDNativeConfiguration.managerOpenOptions
         )
 
         if managerOpenResult != kIOReturnSuccess {
@@ -146,7 +158,10 @@ actor LogitechHIDDiscovery: LogitechHIDDiscovering {
         for opened in openedByID.values {
             opened.device.close()
         }
-        _ = IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        _ = IOHIDManagerClose(
+            manager,
+            LogitechHIDNativeConfiguration.managerCloseOptions
+        )
     }
 
     func interfaces() async -> [LogitechHIDInterface] {
@@ -192,7 +207,12 @@ actor LogitechHIDDiscovery: LogitechHIDDiscovering {
             )
             let transport = HIDPPTransport(io: io)
             do {
-                try io.open(transport: transport)
+                try io.open(
+                    transport: transport,
+                    onRemoval: { [weak self] in
+                        Task { await self?.removeInterface(id: descriptor.id) }
+                    }
+                )
             } catch {
                 SystemLogging.logitechHID.error(
                     "Unable to open selected Logitech HID interface: \(String(describing: error), privacy: .public)"
@@ -209,6 +229,10 @@ actor LogitechHIDDiscovery: LogitechHIDDiscovering {
         }
 
         return interfaces
+    }
+
+    private func removeInterface(id: String) {
+        openedByID.removeValue(forKey: id)
     }
 
     private func currentDevices() -> [IOHIDDevice] {
