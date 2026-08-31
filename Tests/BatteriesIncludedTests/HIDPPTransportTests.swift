@@ -3,6 +3,26 @@ import XCTest
 @testable import BatteriesIncluded
 
 final class HIDPPTransportTests: XCTestCase {
+    func testAllocatesDistinctNonzeroSoftwareIDsAcrossRequests() async throws {
+        let io = FakeHIDPPDeviceIO()
+        let transport = HIDPPTransport(io: io, timeout: .seconds(1))
+        let request = try packet(featureIndex: 7)
+
+        let firstTask = Task { try await transport.send(request) }
+        let firstWrite = await io.waitForWrite(number: 1)
+        await transport.receive(response(for: firstWrite, percentage: 70))
+        _ = try await firstTask.value
+
+        let secondTask = Task { try await transport.send(request) }
+        let secondWrite = await io.waitForWrite(number: 2)
+        await transport.receive(response(for: secondWrite, percentage: 80))
+        _ = try await secondTask.value
+
+        XCTAssertNotEqual(firstWrite[3] & 0x0F, 0)
+        XCTAssertNotEqual(secondWrite[3] & 0x0F, 0)
+        XCTAssertNotEqual(firstWrite[3] & 0x0F, secondWrite[3] & 0x0F)
+    }
+
     func testMatchingResponseCompletesRequestAndClearsPendingWork() async throws {
         let io = FakeHIDPPDeviceIO()
         let transport = HIDPPTransport(io: io, timeout: .seconds(1))
@@ -75,23 +95,23 @@ final class HIDPPTransportTests: XCTestCase {
         let secondRequest = try packet(featureIndex: 8)
 
         let firstTask = Task { try await transport.send(firstRequest) }
-        _ = await io.waitForWrite(number: 1)
+        let firstWrite = await io.waitForWrite(number: 1)
         let secondTask = Task { try await transport.send(secondRequest) }
         await waitForPendingRequestCount(2, in: transport)
 
         firstTask.cancel()
         await assertTaskIsCancelled(firstTask)
         let secondWrite = await io.waitForWrite(number: 2)
-        XCTAssertEqual(secondWrite, secondRequest.bytes)
+        XCTAssertEqual(Array(secondWrite.prefix(3)), Array(secondRequest.bytes.prefix(3)))
 
-        await transport.receive([0x11, 1, 7, 0x1D, 10] + .init(repeating: 0, count: 15))
+        await transport.receive(response(for: firstWrite, percentage: 10))
         let pendingAfterLateResponse = await transport.pendingRequestCount
         XCTAssertEqual(pendingAfterLateResponse, 1)
-        let secondResponse = [UInt8(0x11), 1, 8, 0x1D, 80] + .init(repeating: 0, count: 15)
+        let secondResponse = response(for: secondWrite, percentage: 80)
         await transport.receive(secondResponse)
 
         let receivedSecondResponse = try await secondTask.value
-        XCTAssertEqual(receivedSecondResponse, secondResponse)
+        XCTAssertEqual(receivedSecondResponse[4], 80)
         let pendingRequestCount = await transport.pendingRequestCount
         XCTAssertEqual(pendingRequestCount, 0)
     }
@@ -102,25 +122,20 @@ final class HIDPPTransportTests: XCTestCase {
         let request = try packet(featureIndex: 7)
 
         let firstTask = Task { try await transport.send(request) }
-        _ = await io.waitForWrite(number: 1)
+        let firstWrite = await io.waitForWrite(number: 1)
         let secondTask = Task { try await transport.send(request) }
         await waitForPendingRequestCount(2, in: transport)
 
         firstTask.cancel()
         await assertTaskIsCancelled(firstTask)
-        let lateFirstResponse = [UInt8(0x11), 1, 7, 0x1D, 10] + .init(repeating: 0, count: 15)
-        await transport.receive(lateFirstResponse)
+        let secondWrite = await io.waitForWrite(number: 2)
+        await transport.receive(response(for: firstWrite, percentage: 10))
 
-        await assertTask(secondTask, throws: HIDPPError.disconnected)
-        XCTAssertEqual(io.writeCount, 1)
-
-        let recoveredTask = Task { try await transport.send(request) }
-        await waitForPendingRequestCount(1, in: transport)
-        XCTAssertEqual(io.writeCount, 2)
-        let recoveredResponse = [UInt8(0x11), 1, 7, 0x1D, 73] + .init(repeating: 0, count: 15)
-        await transport.receive(recoveredResponse)
-        let receivedResponse = try await recoveredTask.value
-        XCTAssertEqual(receivedResponse, recoveredResponse)
+        let pendingAfterLateResponse = await transport.pendingRequestCount
+        XCTAssertEqual(pendingAfterLateResponse, 1)
+        await transport.receive(response(for: secondWrite, percentage: 73))
+        let receivedResponse = try await secondTask.value
+        XCTAssertEqual(receivedResponse[4], 73)
     }
 
     func testLateResponseAfterTimeoutCannotCompleteSameSignatureSuccessor() async throws {
@@ -129,16 +144,19 @@ final class HIDPPTransportTests: XCTestCase {
         let request = try packet(featureIndex: 7)
 
         let firstTask = Task { try await transport.send(request) }
-        _ = await io.waitForWrite(number: 1)
+        let firstWrite = await io.waitForWrite(number: 1)
         let secondTask = Task { try await transport.send(request) }
         await waitForPendingRequestCount(2, in: transport)
 
         await assertTask(firstTask, throws: HIDPPError.timeout)
-        let lateFirstResponse = [UInt8(0x11), 1, 7, 0x1D, 10] + .init(repeating: 0, count: 15)
-        await transport.receive(lateFirstResponse)
+        let secondWrite = await io.waitForWrite(number: 2)
+        await transport.receive(response(for: firstWrite, percentage: 10))
 
-        await assertTask(secondTask, throws: HIDPPError.disconnected)
-        XCTAssertEqual(io.writeCount, 1)
+        let pendingAfterLateResponse = await transport.pendingRequestCount
+        XCTAssertEqual(pendingAfterLateResponse, 1)
+        await transport.receive(response(for: secondWrite, percentage: 73))
+        let receivedResponse = try await secondTask.value
+        XCTAssertEqual(receivedResponse[4], 73)
         let pendingRequestCount = await transport.pendingRequestCount
         XCTAssertEqual(pendingRequestCount, 0)
     }
@@ -178,15 +196,15 @@ final class HIDPPTransportTests: XCTestCase {
         let firstResponse = [UInt8(0x11), 1, 7, 0x1D, 70] + .init(repeating: 0, count: 15)
         await transport.receive(firstResponse)
         let secondWrite = await io.waitForWrite(number: 2)
-        XCTAssertEqual(secondWrite, secondRequest.bytes)
+        XCTAssertEqual(Array(secondWrite.prefix(3)), Array(secondRequest.bytes.prefix(3)))
 
-        let secondResponse = [UInt8(0x11), 1, 8, 0x1D, 80] + .init(repeating: 0, count: 15)
+        let secondResponse = response(for: secondWrite, percentage: 80)
         await transport.receive(secondResponse)
 
         let receivedFirstResponse = try await firstTask.value
         let receivedSecondResponse = try await secondTask.value
         XCTAssertEqual(receivedFirstResponse, firstResponse)
-        XCTAssertEqual(receivedSecondResponse, secondResponse)
+        XCTAssertEqual(receivedSecondResponse[4], 80)
     }
 
     func testIndependentTransportsCanProgressConcurrently() async throws {
@@ -226,6 +244,10 @@ final class HIDPPTransportTests: XCTestCase {
             softwareID: 0x0D,
             parameters: []
         )
+    }
+
+    private func response(for request: [UInt8], percentage: UInt8) -> [UInt8] {
+        Array(request.prefix(4)) + [percentage] + .init(repeating: 0, count: 15)
     }
 
     private func waitForPendingRequestCount(

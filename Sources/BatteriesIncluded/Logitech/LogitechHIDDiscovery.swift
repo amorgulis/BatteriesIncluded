@@ -28,7 +28,7 @@ struct LogitechHIDInterfaceDescriptor: Sendable, Equatable, Identifiable {
 
         return HIDPPFallbackIdentity(
             stableID: isReceiverChild ? "\(directStableID):device:\(deviceIndex)" : directStableID,
-            name: isReceiverChild ? nil : productName?.nilIfEmpty,
+            name: isReceiverChild ? nil : productName?.nilIfBlank,
             category: isReceiverChild ? nil : category,
             isReceiverChild: isReceiverChild
         )
@@ -329,5 +329,10 @@ actor LogitechHIDDiscovery: LogitechHIDDiscovering {
 private extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
+    }
+
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

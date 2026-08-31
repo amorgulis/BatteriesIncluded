@@ -45,6 +45,7 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
     }
 
     private struct DeviceCache {
+        var protocolVersionConfirmed = false
         var name: CachedName = .unresolved
         var unifiedBattery: UnifiedBatteryCache = .unresolved
         var legacyBatteryIndex: UInt8?
@@ -67,6 +68,10 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
         deviceIndex: UInt8,
         fallbackIdentity: HIDPPFallbackIdentity
     ) async throws -> HIDPPDeviceReading? {
+        guard try await confirmsHIDPP20(deviceIndex: deviceIndex) else {
+            invalidate(deviceIndex: deviceIndex)
+            return nil
+        }
         guard let name = try await resolvedName(
             deviceIndex: deviceIndex,
             fallbackIdentity: fallbackIdentity
@@ -98,6 +103,28 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
         caches.removeAll()
     }
 
+    private func confirmsHIDPP20(deviceIndex: UInt8) async throws -> Bool {
+        if caches[deviceIndex]?.protocolVersionConfirmed == true {
+            return true
+        }
+
+        let pingByte: UInt8 = 0x5A
+        let parameters = try await send(
+            kind: .short,
+            deviceIndex: deviceIndex,
+            featureIndex: 0,
+            functionID: 1,
+            parameters: [0, 0, pingByte]
+        )
+        guard parameters.count == 3, parameters[2] == pingByte else {
+            throw HIDPPError.invalidPacket
+        }
+        guard parameters[0] >= 2 else { return false }
+
+        caches[deviceIndex, default: DeviceCache()].protocolVersionConfirmed = true
+        return true
+    }
+
     private func resolvedName(
         deviceIndex: UInt8,
         fallbackIdentity: HIDPPFallbackIdentity
@@ -125,7 +152,6 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
                 featureIndex: featureIndex,
                 functionID: 0
             ).first, nameLength > 0 else {
-                caches[deviceIndex, default: DeviceCache()].name = .value(nil)
                 return nil
             }
 
@@ -141,14 +167,12 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
                 let expectedChunkLength = min(remaining, parameters.count)
                 let chunk = Array(parameters.prefix(expectedChunkLength))
                 guard chunk.count == expectedChunkLength, !chunk.contains(0) else {
-                    caches[deviceIndex, default: DeviceCache()].name = .value(nil)
                     return nil
                 }
                 nameBytes += chunk
             }
 
             guard let name = decodedName(from: nameBytes) else {
-                caches[deviceIndex, default: DeviceCache()].name = .value(nil)
                 return nil
             }
             caches[deviceIndex, default: DeviceCache()].name = .value(name)
@@ -267,13 +291,14 @@ actor HIDPPBatteryReader: HIDPPBatteryReading {
     }
 
     private func send(
+        kind: HIDPPReportKind = .long,
         deviceIndex: UInt8,
         featureIndex: UInt8,
         functionID: UInt8,
         parameters: [UInt8] = []
     ) async throws -> [UInt8] {
         let packet = try HIDPPPacket.request(
-            kind: .long,
+            kind: kind,
             deviceIndex: deviceIndex,
             featureIndex: featureIndex,
             functionID: functionID,

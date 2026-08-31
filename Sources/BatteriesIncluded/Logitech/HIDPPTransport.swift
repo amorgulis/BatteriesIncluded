@@ -8,12 +8,14 @@ actor HIDPPTransport: HIDPPRequesting {
     private struct PendingRequest {
         let id: UInt64
         let packet: HIDPPPacket
+        let responseSoftwareID: UInt8
         let continuation: CheckedContinuation<[UInt8], Error>
     }
 
     private let io: any HIDPPDeviceIO
     private let timeout: Duration
     private var nextRequestID: UInt64 = 0
+    private var nextSoftwareID: UInt8 = 0x0D
     private var activeRequest: PendingRequest?
     private var queuedRequests: [PendingRequest] = []
     private var responseTombstones: [HIDPPPacket] = []
@@ -32,6 +34,8 @@ actor HIDPPTransport: HIDPPRequesting {
     func send(_ packet: HIDPPPacket) async throws -> [UInt8] {
         let requestID = nextRequestID
         nextRequestID &+= 1
+        let responseSoftwareID = packet.bytes[3] & 0x0F
+        let wirePacket = try packet.replacingSoftwareID(allocateSoftwareID())
         try Task.checkCancellation()
 
         return try await withTaskCancellationHandler {
@@ -47,7 +51,8 @@ actor HIDPPTransport: HIDPPRequesting {
 
                 queuedRequests.append(PendingRequest(
                     id: requestID,
-                    packet: packet,
+                    packet: wirePacket,
+                    responseSoftwareID: responseSoftwareID,
                     continuation: continuation
                 ))
                 startNextRequestIfNeeded()
@@ -143,12 +148,31 @@ actor HIDPPTransport: HIDPPRequesting {
         first.bytes[1...3].elementsEqual(second.bytes[1...3])
     }
 
+    private func allocateSoftwareID() -> UInt8 {
+        defer {
+            nextSoftwareID = nextSoftwareID == 0x0F ? 1 : nextSoftwareID + 1
+        }
+        return nextSoftwareID
+    }
+
+    private func restoringSoftwareID(
+        in response: [UInt8],
+        to softwareID: UInt8
+    ) -> [UInt8] {
+        guard response.count >= 4 else { return response }
+        var restored = response
+        restored[3] = (restored[3] & 0xF0) | softwareID
+        return restored
+    }
+
     private func finishActive(with result: Result<[UInt8], Error>) {
         guard let request = activeRequest else { return }
         activeRequest = nil
         timeoutTask?.cancel()
         timeoutTask = nil
-        request.continuation.resume(with: result)
+        request.continuation.resume(with: result.map {
+            restoringSoftwareID(in: $0, to: request.responseSoftwareID)
+        })
         startNextRequestIfNeeded()
     }
 }

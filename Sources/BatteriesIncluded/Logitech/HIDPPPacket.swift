@@ -39,6 +39,15 @@ struct HIDPPPacket: Sendable, Equatable {
         bytes.dropFirst(4)
     }
 
+    func replacingSoftwareID(_ softwareID: UInt8) throws -> Self {
+        guard softwareID > 0, softwareID < 0x10, bytes.count >= 4 else {
+            throw HIDPPError.invalidPacket
+        }
+        var updatedBytes = bytes
+        updatedBytes[3] = (updatedBytes[3] & 0xF0) | softwareID
+        return .init(bytes: updatedBytes)
+    }
+
     func matchesResponse(_ response: [UInt8]) -> Bool {
         response.count == bytes.count && response.prefix(4).elementsEqual(bytes.prefix(4))
     }

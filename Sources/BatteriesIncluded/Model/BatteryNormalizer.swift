@@ -81,8 +81,13 @@ struct BatteryNormalizer: Sendable {
             return left.offset < right.offset
         }.map(\.element)
 
-        let name = newestFirst.first(where: { !$0.name.isEmpty })?.name ?? "Unknown Device"
-        let category = newestFirst.compactMap(\.category).first ?? .other
+        let systemIdentity = newestFirst.filter { $0.source != .logitechHID }
+        let name = systemIdentity.first(where: { !$0.name.isEmpty })?.name
+            ?? newestFirst.first(where: { !$0.name.isEmpty })?.name
+            ?? "Unknown Device"
+        let category = systemIdentity.compactMap(\.category).first
+            ?? newestFirst.compactMap(\.category).first
+            ?? .other
 
         var selected: [BatteryComponent: BatteryObservation] = [:]
         for observation in newestFirst where isValid(observation, now: now) {

@@ -2,6 +2,26 @@ import XCTest
 @testable import BatteriesIncluded
 
 final class HIDPPBatteryReaderTests: XCTestCase {
+    func testRejectsTargetBelowHIDPP20AfterProtocolPing() async throws {
+        let requester = ScriptedRequester(
+            featureIndices: [0x1004: 7],
+            protocolVersion: (major: 1, minor: 0)
+        )
+        await requester.setParameters(deviceIndex: 1, featureIndex: 7, functionID: 0, parameters: [0, 0x02])
+        await requester.setParameters(deviceIndex: 1, featureIndex: 7, functionID: 1, parameters: [73, 0])
+        let reader = HIDPPBatteryReader(requester: requester)
+
+        let reading = try await reader.read(deviceIndex: 1, fallbackIdentity: identity())
+        let protocolPingCount = await requester.requestCount(
+            deviceIndex: 1,
+            featureIndex: 0,
+            functionID: 1
+        )
+
+        XCTAssertNil(reading)
+        XCTAssertEqual(protocolPingCount, 1)
+    }
+
     func testReadsStateOfChargeFromLongDynamicallyResolvedUnifiedBatteryFeature() async throws {
         let requester = ScriptedRequester(featureIndices: [0x1004: 7])
         await requester.setParameters(deviceIndex: 1, featureIndex: 7, functionID: 0, parameters: [0, 0x02])
@@ -16,7 +36,7 @@ final class HIDPPBatteryReaderTests: XCTestCase {
             deviceIndex: 1, stableID: "receiver-1", name: "MX Master", category: .mouse, percentage: 73
         ))
         XCTAssertEqual(featureIDs, [0x1004])
-        XCTAssertEqual(reportIDs, [0x11, 0x11, 0x11])
+        XCTAssertEqual(reportIDs, [0x10, 0x11, 0x11, 0x11])
     }
 
     func testMapsUnifiedBatteryDiscreteLevelFromStatusParameterOne() async throws {
@@ -123,6 +143,27 @@ final class HIDPPBatteryReaderTests: XCTestCase {
         XCTAssertNil(reading)
     }
 
+    func testRetriesReceiverChildNameAfterZeroLengthResponse() async throws {
+        let requester = ScriptedRequester(featureIndices: [0x0005: 5])
+        await requester.setParameters(deviceIndex: 1, featureIndex: 5, functionID: 0, parameters: [0])
+        let reader = HIDPPBatteryReader(requester: requester)
+        let child = identity(name: nil, isReceiverChild: true)
+
+        let firstReading = try await reader.read(deviceIndex: 1, fallbackIdentity: child)
+        await requester.setParameters(deviceIndex: 1, featureIndex: 5, functionID: 0, parameters: [2])
+        await requester.setParameters(
+            deviceIndex: 1,
+            featureIndex: 5,
+            functionID: 1,
+            requestParameters: [0],
+            parameters: Array("MX".utf8)
+        )
+        let secondReading = try await reader.read(deviceIndex: 1, fallbackIdentity: child)
+
+        XCTAssertNil(firstReading)
+        XCTAssertEqual(secondReading?.name, "MX")
+    }
+
     func testCachesUnifiedBatteryFeatureAndCapabilitiesPerDevice() async throws {
         let requester = ScriptedRequester(featureIndices: [0x1004: 7])
         await requester.setParameters(deviceIndex: 1, featureIndex: 7, functionID: 0, parameters: [0, 0x02])
@@ -134,8 +175,10 @@ final class HIDPPBatteryReaderTests: XCTestCase {
         let featureIDs = await requester.requestedFeatureIDs()
         let capabilitiesCount = await requester.requestCount(deviceIndex: 1, featureIndex: 7, functionID: 0)
         let statusCount = await requester.requestCount(deviceIndex: 1, featureIndex: 7, functionID: 1)
+        let protocolPingCount = await requester.requestCount(deviceIndex: 1, featureIndex: 0, functionID: 1)
 
         XCTAssertEqual(featureIDs, [0x1004])
+        XCTAssertEqual(protocolPingCount, 1)
         XCTAssertEqual(capabilitiesCount, 1)
         XCTAssertEqual(statusCount, 2)
     }
@@ -230,17 +273,30 @@ private actor ScriptedRequester: HIDPPRequesting {
     }
 
     private var featureIndices: [UInt16: UInt8]
+    private let protocolVersion: (major: UInt8, minor: UInt8)
     private var parameterResponses: [Function: [UInt8]] = [:]
     private var rawResponses: [Function: [UInt8]] = [:]
     private var requests: [HIDPPPacket] = []
 
-    init(featureIndices: [UInt16: UInt8] = [:]) {
+    init(
+        featureIndices: [UInt16: UInt8] = [:],
+        protocolVersion: (major: UInt8, minor: UInt8) = (2, 0)
+    ) {
         self.featureIndices = featureIndices
+        self.protocolVersion = protocolVersion
     }
 
     func send(_ packet: HIDPPPacket) async throws -> [UInt8] {
         requests.append(packet)
         let functionID = packet.bytes[3] >> 4
+        if packet.bytes[2] == 0, functionID == 1 {
+            return response(
+                for: packet,
+                parameters: [
+                    protocolVersion.major, protocolVersion.minor, packet.bytes[6]
+                ]
+            )
+        }
         if packet.bytes[2] == 0, functionID == 0 {
             let featureID = UInt16(packet.bytes[4]) << 8 | UInt16(packet.bytes[5])
             guard let featureIndex = featureIndices[featureID] else { return invalidFeatureResponse(for: packet) }
@@ -311,8 +367,8 @@ private actor ScriptedRequester: HIDPPRequesting {
     }
 
     private func response(for request: HIDPPPacket, parameters: [UInt8]) -> [UInt8] {
-        [0x11, request.bytes[1], request.bytes[2], request.bytes[3]] + parameters
-            + Array(repeating: 0, count: HIDPPReportKind.long.length - 4 - parameters.count)
+        [request.bytes[0], request.bytes[1], request.bytes[2], request.bytes[3]] + parameters
+            + Array(repeating: 0, count: request.bytes.count - 4 - parameters.count)
     }
 
     private func invalidFeatureResponse(for request: HIDPPPacket) -> [UInt8] {

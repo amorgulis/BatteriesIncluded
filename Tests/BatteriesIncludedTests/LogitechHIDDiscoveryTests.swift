@@ -70,6 +70,12 @@ final class LogitechHIDDiscoveryTests: XCTestCase {
         XCTAssertFalse(descriptor.identity(deviceIndex: 0xFF).isReceiverChild)
     }
 
+    func testDirectIdentityRejectsWhitespaceOnlyProductName() {
+        let descriptor = fixture(productName: " \n\t ")
+
+        XCTAssertNil(descriptor.identity(deviceIndex: 0xFF).name)
+    }
+
     func testReceiverChildDoesNotUseReceiverProductName() {
         let descriptor = fixture(productName: "USB Receiver")
 

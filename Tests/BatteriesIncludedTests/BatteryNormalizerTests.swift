@@ -95,6 +95,20 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result.single?.levels.single?.percentage, 61)
     }
 
+    func testMergedLogitechReadingPreservesOlderSystemNameAndCategory() {
+        let result = BatteryNormalizer().normalize([
+            observation(id: "AA:BB", stableID: "AA:BB", name: "MX Master 3S",
+                        percentage: nil, source: .system, category: .mouse, age: 1),
+            observation(id: "receiver:1", stableID: "receiver:1", name: " mx master 3s ",
+                        percentage: 61, source: .logitechHID, category: .keyboard)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.single?.id, "stable:AA:BB")
+        XCTAssertEqual(result.single?.name, "MX Master 3S")
+        XCTAssertEqual(result.single?.category, .mouse)
+        XCTAssertEqual(result.single?.levels.single?.percentage, 61)
+    }
+
     func testDoesNotMergeAmbiguousLogitechName() {
         let result = BatteryNormalizer().normalize([
             observation(id: "system", stableID: "system", name: "MX Keys", source: .system),
