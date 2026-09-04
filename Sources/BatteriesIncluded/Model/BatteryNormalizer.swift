@@ -49,6 +49,15 @@ struct BatteryNormalizer: Sendable {
             let secondSources = Set(second.map(\.source))
             let systemSources: Set<BatterySource> = [.system, .systemProfiler]
 
+            if firstSources == [.logitechHID] || secondSources == [.logitechHID] {
+                let logitechKey = firstSources == [.logitechHID] ? sortedKeys[0] : sortedKeys[1]
+                let otherKey = logitechKey == sortedKeys[0] ? sortedKeys[1] : sortedKeys[0]
+                let otherSources = Set(grouped[otherKey, default: []].map(\.source))
+                guard otherSources.isSubset(of: systemSources.union([.coreBluetooth])) else { continue }
+                grouped[otherKey, default: []].append(contentsOf: grouped.removeValue(forKey: logitechKey) ?? [])
+                continue
+            }
+
             let systemKey: String
             let bleKey: String
             if !firstSources.isDisjoint(with: systemSources), firstSources.contains(.coreBluetooth) == false,
@@ -93,14 +102,18 @@ struct BatteryNormalizer: Sendable {
             selected.removeValue(forKey: .whole)
         }
 
-        let levels = selected.map { (component: $0.key, percentage: $0.value.percentage!) }
+        let levels = selected.compactMap { component, observation in
+            observation.percentage.map { (component: component, percentage: $0) }
+        }
             .sorted { $0.component < $1.component }
+        let coarseLevel = levels.isEmpty ? selected[.whole]?.coarseLevel : nil
 
         return DeviceBattery(
             id: normalizedID(for: observations[0]),
             name: name,
             category: category,
-            levels: levels
+            levels: levels,
+            coarseLevel: coarseLevel
         )
     }
 
@@ -112,7 +125,8 @@ struct BatteryNormalizer: Sendable {
     }
 
     private func isValid(_ observation: BatteryObservation, now: Date) -> Bool {
-        guard let percentage = observation.percentage, (0...100).contains(percentage) else {
+        guard observation.percentage.map({ (0...100).contains($0) }) == true ||
+              observation.coarseLevel != nil else {
             return false
         }
         let age = now.timeIntervalSince(observation.observedAt)
@@ -120,6 +134,9 @@ struct BatteryNormalizer: Sendable {
     }
 
     private func isPreferred(_ candidate: BatteryObservation, over existing: BatteryObservation) -> Bool {
+        if (candidate.percentage != nil) != (existing.percentage != nil) {
+            return candidate.percentage != nil
+        }
         if candidate.source == .systemProfiler || existing.source == .systemProfiler {
             return candidate.source.rawValue > existing.source.rawValue
         }
