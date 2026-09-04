@@ -34,7 +34,7 @@ struct BatteryMenuView: View {
                 DeviceRowView(device: device)
             }
         case .noDevices:
-            Label("No Bluetooth devices connected", systemImage: "wave.3.right")
+            Label("No supported devices connected", systemImage: "wave.3.right")
         case .bluetoothOff:
             Label(
                 "Bluetooth is off",
