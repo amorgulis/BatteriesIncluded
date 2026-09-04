@@ -31,6 +31,19 @@ final class MenuPresentationTests: XCTestCase {
         XCTAssertEqual(device.primaryBatteryText, "73%")
     }
 
+    func testCoarseWholeDeviceShowsNamedLevel() {
+        let device = DeviceBattery(
+            id: "x",
+            name: "Keyboard",
+            category: .keyboard,
+            levels: [],
+            coarseLevel: .good
+        )
+
+        XCTAssertEqual(device.primaryBatteryText, "Good")
+        XCTAssertEqual(device.menuRowText, "Keyboard — Good")
+    }
+
     func testMenuRowKeepsMouseNameAndPercentageInOneVisibleString() {
         let device = DeviceBattery(
             id: "x",

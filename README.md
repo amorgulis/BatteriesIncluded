@@ -1,7 +1,8 @@
 # Batteries Included
 
 Batteries Included is a macOS 14+ menu-bar app that displays battery levels
-for currently connected Bluetooth devices.
+for currently connected Bluetooth devices and Logitech devices that expose
+battery information over HID++.
 
 ## Requirements
 
@@ -46,5 +47,6 @@ stapling produces the final distributable archive containing the notarization
 ticket.
 
 Battery support is best-effort: macOS and the connected peripheral must expose
-a battery value. Connected devices without a readable value remain visible as
-`Battery unavailable`.
+a battery value. Logitech HID++ 1.0 and 2.0 devices can report either exact
+percentages or coarse levels such as `Good` and `Low`. Bluetooth devices without
+a readable value remain visible as `Battery unavailable`.
