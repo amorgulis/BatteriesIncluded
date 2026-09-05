@@ -6,8 +6,12 @@ struct IOKitLogitechHIDDiscovery: LogitechHIDDiscovering {
     func discover() async -> [LogitechHIDEndpoint] {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         IOHIDManagerSetDeviceMatching(manager, [kIOHIDVendorIDKey: 0x046D] as CFDictionary)
-        guard IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess,
-              let deviceSet = IOHIDManagerCopyDevices(manager) else { return [] }
+        let managerOpenResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        let copiedDevices = IOHIDManagerCopyDevices(manager)
+        guard Self.canUseEnumeratedDevices(
+            managerOpenResult: managerOpenResult,
+            deviceSetAvailable: copiedDevices != nil
+        ), let deviceSet = copiedDevices else { return [] }
 
         var devicesByPhysicalID: [String: IOHIDDevice] = [:]
         for value in (deviceSet as NSSet) {
@@ -29,9 +33,19 @@ struct IOKitLogitechHIDDiscovery: LogitechHIDDiscovering {
                 name: name,
                 category: category(for: name),
                 deviceIndices: receiver ? Array(1...6) : [0xFF],
-                transport: IOKitHIDPPTransport(device: device)
+                transport: IOKitHIDPPTransport(device: device, manager: manager)
             )
         }
+    }
+
+    nonisolated static func canUseEnumeratedDevices(
+        managerOpenResult: IOReturn,
+        deviceSetAvailable: Bool
+    ) -> Bool {
+        // A composite receiver can make the manager-level open fail TCC while
+        // its vendor-defined HID++ interface remains individually accessible.
+        _ = managerOpenResult
+        return deviceSetAvailable
     }
 
     private func supportsHIDPP(_ device: IOHIDDevice) -> Bool {
@@ -109,13 +123,16 @@ struct IOKitLogitechHIDDiscovery: LogitechHIDDiscovering {
 
 private actor IOKitHIDPPTransport: HIDPPTransport {
     private let device: IOHIDDevice
+    private let manager: IOHIDManager
     private let inputReports: HIDInputReportBuffer
     private let callbackQueue = DispatchQueue(label: "BatteriesIncluded.LogitechHID")
 
-    init(device: IOHIDDevice) {
+    init(device: IOHIDDevice, manager: IOHIDManager) {
         self.device = device
+        self.manager = manager
         self.inputReports = HIDInputReportBuffer()
-        guard IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess else {
+        let openResult = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
+        guard openResult == kIOReturnSuccess else {
             return
         }
         IOHIDDeviceSetDispatchQueue(device, callbackQueue)
@@ -152,13 +169,25 @@ private actor IOKitHIDPPTransport: HIDPPTransport {
         }
         guard writeResult == kIOReturnSuccess else { return nil }
 
-        for _ in 0..<30 {
-            if let response = inputReports.popFirst(where: { HIDPPProtocol.isReply($0, to: report) }) {
+        for _ in 0..<200 {
+            if let response = inputReports.popFirst(where: {
+                HIDPPProtocol.isReply($0, to: report) || HIDPPProtocol.isErrorReply($0, to: report)
+            }) {
+                if HIDPPProtocol.isErrorReply(response, to: report) { return nil }
                 return response
             }
             try? await Task.sleep(for: .milliseconds(5))
         }
         return nil
+    }
+
+    func prepare(deviceIndex: UInt8) async {
+        guard deviceIndex != 0xFF else { return }
+        if await request(HIDPPProtocol.pingRequest(deviceIndex: deviceIndex, marker: 0xA5)) == nil {
+            // Sleeping keyboards can take longer than a normal request timeout
+            // to answer their first packet after radio wake-up.
+            try? await Task.sleep(for: .milliseconds(350))
+        }
     }
 
 }

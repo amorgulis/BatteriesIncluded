@@ -13,6 +13,15 @@ private actor QueuedHIDPPTransport: HIDPPTransport {
     }
 }
 
+private actor RecordingHIDPPTransport: HIDPPTransport {
+    private(set) var requests: [[UInt8]] = []
+
+    func request(_ report: [UInt8]) async -> [UInt8]? {
+        requests.append(report)
+        return nil
+    }
+}
+
 private struct FixtureLogitechDiscovery: LogitechHIDDiscovering {
     let endpoints: [LogitechHIDEndpoint]
 
@@ -20,6 +29,22 @@ private struct FixtureLogitechDiscovery: LogitechHIDDiscovering {
 }
 
 final class LogitechHIDCollectorTests: XCTestCase {
+    func testRootFeatureLookupUsesFunctionZero() async {
+        let transport = RecordingHIDPPTransport()
+        let endpoint = LogitechHIDEndpoint(
+            id: "receiver:9", name: "Logitech Receiver", category: .other,
+            deviceIndices: [1], transport: transport
+        )
+        let collector = LogitechHIDCollector(
+            discovery: FixtureLogitechDiscovery(endpoints: [endpoint])
+        )
+
+        _ = await collector.collect()
+
+        let requests = await transport.requests
+        XCTAssertEqual(Array(requests[0].prefix(4)), [0x10, 1, 0, 0x08])
+    }
+
     func testCollectsExactHIDPP20BatteryFromDirectDevice() async {
         let transport = QueuedHIDPPTransport([
             [0x10, 0xFF, 0x00, 0x18, 0x05, 0, 0],
