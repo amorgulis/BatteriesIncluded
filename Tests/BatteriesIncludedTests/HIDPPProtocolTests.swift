@@ -2,6 +2,13 @@ import XCTest
 @testable import BatteriesIncluded
 
 final class HIDPPProtocolTests: XCTestCase {
+    func testPingRequestUsesFunctionOneAndEchoMarker() {
+        XCTAssertEqual(
+            HIDPPProtocol.pingRequest(deviceIndex: 1, marker: 0xA5),
+            [0x10, 1, 0, 0x18, 0, 0, 0xA5]
+        )
+    }
+
     func testShortRequestUsesHIDPPFramingAndSoftwareID() {
         XCTAssertEqual(
             HIDPPProtocol.shortRequest(deviceIndex: 2, command: 0x00, address: 0x10, parameters: [0x10, 0x04]),
@@ -53,5 +60,13 @@ final class HIDPPProtocolTests: XCTestCase {
 
         XCTAssertTrue(HIDPPProtocol.isReply([0x10, 1, 5, 0x19, 50, 0, 0], to: request))
         XCTAssertFalse(HIDPPProtocol.isReply([0x10, 1, 5, 0x1A, 50, 0, 0], to: request))
+    }
+
+    func testErrorReplyMatchesOriginalRequest() {
+        let request = HIDPPProtocol.shortRequest(
+            deviceIndex: 2, command: 0, address: 0, parameters: [0x10, 0x04], softwareID: 9
+        )
+        XCTAssertTrue(HIDPPProtocol.isErrorReply([0x10, 2, 0x8F, 0, 9, 9, 0], to: request))
+        XCTAssertFalse(HIDPPProtocol.isErrorReply([0x10, 3, 0x8F, 0, 9, 9, 0], to: request))
     }
 }
