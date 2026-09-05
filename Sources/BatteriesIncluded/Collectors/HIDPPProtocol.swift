@@ -10,6 +10,15 @@ enum HIDPPProtocol {
     static let longReportID: UInt8 = 0x11
     static let softwareID: UInt8 = 0x08
 
+    static func pingRequest(deviceIndex: UInt8, marker: UInt8) -> [UInt8] {
+        shortRequest(
+            deviceIndex: deviceIndex,
+            command: 0,
+            address: 0x10,
+            parameters: [0, 0, marker]
+        )
+    }
+
     static func shortRequest(
         deviceIndex: UInt8,
         command: UInt8,
@@ -32,6 +41,13 @@ enum HIDPPProtocol {
         if response[2] == 0x8F || response[2] == 0xFF { return false }
         return (response[1] == request[1] || response[1] == request[1] ^ 0xFF) &&
             response[2] == request[2] && response[3] == request[3]
+    }
+
+    static func isErrorReply(_ response: [UInt8], to request: [UInt8]) -> Bool {
+        guard response.count >= 6, request.count >= 4,
+              response[2] == 0x8F || response[2] == 0xFF else { return false }
+        return (response[1] == request[1] || response[1] == request[1] ^ 0xFF) &&
+            response[3] == request[2] && response[4] == request[3]
     }
 
     static func parseBatteryStatus(_ report: [UInt8]) -> HIDPPBatteryValue? {

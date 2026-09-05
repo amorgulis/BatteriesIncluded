@@ -2,6 +2,11 @@ import Foundation
 
 protocol HIDPPTransport: Sendable {
     func request(_ report: [UInt8]) async -> [UInt8]?
+    func prepare(deviceIndex: UInt8) async
+}
+
+extension HIDPPTransport {
+    func prepare(deviceIndex: UInt8) async {}
 }
 
 struct LogitechHIDEndpoint: Sendable {
@@ -35,6 +40,7 @@ actor LogitechHIDCollector: BatteryCollecting {
 
         for endpoint in endpoints {
             for deviceIndex in endpoint.deviceIndices {
+                await endpoint.transport.prepare(deviceIndex: deviceIndex)
                 guard let battery = await readBattery(
                     deviceIndex: deviceIndex,
                     transport: endpoint.transport
@@ -77,7 +83,7 @@ actor LogitechHIDCollector: BatteryCollecting {
             let featureRequest = makeRequest(
                 deviceIndex: deviceIndex,
                 command: 0,
-                address: 0x10,
+                address: 0,
                 parameters: [UInt8(feature >> 8), UInt8(feature & 0xFF)]
             )
             guard let featureReply = await transport.request(featureRequest),
@@ -110,7 +116,7 @@ actor LogitechHIDCollector: BatteryCollecting {
         transport: any HIDPPTransport
     ) async -> String? {
         let featureRequest = makeRequest(
-            deviceIndex: deviceIndex, command: 0, address: 0x10, parameters: [0x00, 0x05]
+            deviceIndex: deviceIndex, command: 0, address: 0, parameters: [0x00, 0x05]
         )
         guard let featureReply = await transport.request(featureRequest),
               featureReply.count >= 5, featureReply[4] != 0 else { return nil }
