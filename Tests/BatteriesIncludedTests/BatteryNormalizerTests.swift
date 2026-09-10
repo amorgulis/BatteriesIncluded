@@ -63,6 +63,56 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result[0].levels.map(\.percentage), [90])
     }
 
+    func testPositiveWholeReplacesPlaceholderHeadphoneZeros() {
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 80, source: .systemProfiler),
+            observation(component: .left, percentage: 0),
+            observation(component: .right, percentage: 0),
+            observation(component: .case, percentage: 0)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.whole])
+        XCTAssertEqual(result[0].levels.map(\.percentage), [80])
+    }
+
+    func testPreservesExplicitZeroComponentsFromSystemReport() {
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 80),
+            observation(component: .left, percentage: 0, source: .systemProfiler),
+            observation(component: .right, percentage: 0, source: .systemProfiler),
+            observation(component: .case, percentage: 0, source: .systemProfiler)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.left, .right, .case])
+        XCTAssertEqual(result[0].levels.map(\.percentage), [0, 0, 0])
+    }
+
+    func testPreservesEmptyComponentAlongsideChargedComponents() {
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 80),
+            observation(component: .left, percentage: 80),
+            observation(component: .right, percentage: 80),
+            observation(component: .case, percentage: 0)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.left, .right, .case])
+        XCTAssertEqual(result[0].levels.map(\.percentage), [80, 80, 0])
+    }
+
+    func testZeroComponentsRemainWithoutFreshPositiveWhole() {
+        for (percentage, age): (Int?, TimeInterval) in [(nil, 0), (0, 0), (80, 61)] {
+            let result = BatteryNormalizer().normalize([
+                observation(percentage: percentage, age: age),
+                observation(component: .left, percentage: 0),
+                observation(component: .right, percentage: 0),
+                observation(component: .case, percentage: 0)
+            ], now: Date(timeIntervalSince1970: 1_000))
+
+            XCTAssertEqual(result[0].levels.map(\.component), [.left, .right, .case])
+            XCTAssertEqual(result[0].levels.map(\.percentage), [0, 0, 0])
+        }
+    }
+
     func testPrefersBLEReadingWithinOneSecond() {
         let result = BatteryNormalizer().normalize([
             observation(percentage: 90, source: .system),
