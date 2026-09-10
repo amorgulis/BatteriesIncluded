@@ -98,6 +98,23 @@ struct BatteryNormalizer: Sendable {
             }
         }
 
+        let headphoneComponents: [BatteryComponent] = [.left, .right, .case]
+        let hasExplicitComponents = newestFirst.contains {
+            $0.component != .whole && $0.source != .system && isValid($0, now: now)
+        }
+        if category == .headphones,
+           let wholePercentage = selected[.whole]?.percentage, wholePercentage > 0,
+           !hasExplicitComponents,
+           headphoneComponents.allSatisfy({
+               selected[$0]?.source == .system && selected[$0]?.percentage == 0
+           }) {
+            // Generic Bluetooth selectors can expose placeholder zeros for headphones
+            // with one battery. Prefer the positive overall reading in that case.
+            for component in headphoneComponents {
+                selected.removeValue(forKey: component)
+            }
+        }
+
         if selected.keys.contains(where: { $0 != .whole }) {
             selected.removeValue(forKey: .whole)
         }
