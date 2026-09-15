@@ -1,6 +1,5 @@
 import SwiftUI
 
-@main
 struct BatteriesIncludedApp: App {
     @State private var monitor = DeviceMonitor(collectors: [
         SystemBluetoothCollector(), CoreBluetoothCollector(), SystemProfilerCollector(),
@@ -14,5 +13,23 @@ struct BatteriesIncludedApp: App {
                 .onAppear { Task { await monitor.refresh() } }
         }
         .menuBarExtraStyle(.menu)
+    }
+}
+
+@main
+@MainActor
+enum BatteriesIncludedEntryPoint {
+    static func main() async {
+        if CommandLine.arguments.dropFirst().first == BluetoothHelperRunner.argument {
+            let snapshot = await SystemBluetoothCollector().collectInCurrentProcess()
+            do {
+                let data = try JSONEncoder().encode(snapshot)
+                try FileHandle.standardOutput.write(contentsOf: data)
+            } catch {
+                exit(1)
+            }
+            return
+        }
+        BatteriesIncludedApp.main()
     }
 }
