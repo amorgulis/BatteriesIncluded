@@ -9,6 +9,7 @@ struct SystemDeviceReading: Sendable {
     let isConnected: Bool
     let category: DeviceCategory
     let percentages: [BatteryComponent: Int?]
+    var isMultiBatteryDevice: Bool? = nil
 }
 
 actor SystemBluetoothCollector: BatteryCollecting {
@@ -16,7 +17,7 @@ actor SystemBluetoothCollector: BatteryCollecting {
         (.left, ["BatteryPercentLeft", "batteryPercentLeft"]),
         (.right, ["BatteryPercentRight", "batteryPercentRight"]),
         (.case, ["BatteryPercentCase", "batteryPercentCase"]),
-        (.whole, ["BatteryPercent", "BatteryPercentSingle", "batteryPercent"])
+        (.whole, ["BatteryPercent", "BatteryPercentSingle", "batteryPercentSingle", "batteryPercent"])
     ]
 
     private static let addressKeys = [
@@ -53,7 +54,8 @@ actor SystemBluetoothCollector: BatteryCollecting {
                         minor: device.deviceClassMinor,
                         name: device.name ?? ""
                     ),
-                    percentages: percentages
+                    percentages: percentages,
+                    isMultiBatteryDevice: Self.multiBatteryCapability(fromDevice: device)
                 )
             }
 
@@ -70,7 +72,8 @@ actor SystemBluetoothCollector: BatteryCollecting {
         guard !address.isEmpty else { return [] }
 
         let relevantPercentages = reading.percentages.filter { component, _ in
-            reading.category == .headphones || component == .whole
+            component == .whole ||
+                (reading.category == .headphones && reading.isMultiBatteryDevice != false)
         }
         let levels = relevantPercentages.compactMap { component, percentage in
             percentage.map { (component, $0) }
@@ -119,7 +122,7 @@ actor SystemBluetoothCollector: BatteryCollecting {
         return controller.powerState == kBluetoothHCIPowerStateOFF ? .poweredOff : .available
     }
 
-    private static func percentages(fromDevice device: IOBluetoothDevice) -> [BatteryComponent: Int?] {
+    nonisolated static func percentages(fromDevice device: NSObject) -> [BatteryComponent: Int?] {
         var result: [BatteryComponent: Int?] = [:]
 
         for (component, keys) in componentKeys {
@@ -134,6 +137,12 @@ actor SystemBluetoothCollector: BatteryCollecting {
         }
 
         return result
+    }
+
+    nonisolated static func multiBatteryCapability(fromDevice device: NSObject) -> Bool? {
+        let key = "isMultiBatteryDevice"
+        guard device.responds(to: NSSelectorFromString(key)) else { return nil }
+        return (device.value(forKey: key) as? NSNumber)?.boolValue
     }
 
     private func registryPercentagesByAddress() -> [String: [BatteryComponent: Int?]] {
