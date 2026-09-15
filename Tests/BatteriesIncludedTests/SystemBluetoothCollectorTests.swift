@@ -2,6 +2,40 @@ import XCTest
 @testable import BatteriesIncluded
 
 final class SystemBluetoothCollectorTests: XCTestCase {
+    func testReadsLowercaseSingleBatterySelector() {
+        let percentages = SystemBluetoothCollector.percentages(fromDevice: SingleBatteryHeadphones())
+        XCTAssertEqual(percentages[.whole] ?? nil, 90)
+    }
+
+    func testSingleBatteryHeadphonesIgnoreComponentZeros() {
+        let reading = SystemDeviceReading(
+            address: "AA-BB", name: "WH-1000XM5", isConnected: true,
+            category: .headphones,
+            percentages: [.whole: 90, .left: 0, .right: 0, .case: 0],
+            isMultiBatteryDevice: false
+        )
+        let observations = SystemBluetoothCollector.map(reading, now: .distantPast)
+        XCTAssertEqual(observations.map(\.component), [.whole])
+        XCTAssertEqual(observations.map(\.percentage), [90])
+    }
+
+    func testSingleBatteryHeadphonesWithoutLevelReportUnavailable() {
+        let reading = SystemDeviceReading(
+            address: "AA-BB", name: "WH-1000XM5", isConnected: true,
+            category: .headphones, percentages: [.left: 0, .right: 0, .case: 0],
+            isMultiBatteryDevice: false
+        )
+        let observations = SystemBluetoothCollector.map(reading, now: .distantPast)
+        XCTAssertEqual(observations.map(\.component), [.whole])
+        XCTAssertNil(observations[0].percentage)
+    }
+
+    func testReadsMultiBatteryCapabilityWhenAvailable() {
+        XCTAssertEqual(SystemBluetoothCollector.multiBatteryCapability(fromDevice: SingleBatteryHeadphones()), false)
+        XCTAssertEqual(SystemBluetoothCollector.multiBatteryCapability(fromDevice: MultiBatteryHeadphones()), true)
+        XCTAssertNil(SystemBluetoothCollector.multiBatteryCapability(fromDevice: NSObject()))
+    }
+
     func testMapsConnectedMultiComponentDevice() {
         let reading = SystemDeviceReading(
             address: "AA-BB", name: "Buds", isConnected: true,
@@ -85,4 +119,13 @@ final class SystemBluetoothCollectorTests: XCTestCase {
         XCTAssertEqual(observations[0].component, .whole)
         XCTAssertNil(observations[0].percentage)
     }
+}
+
+private final class SingleBatteryHeadphones: NSObject {
+    @objc var batteryPercentSingle: Int { 90 }
+    @objc var isMultiBatteryDevice: Bool { false }
+}
+
+private final class MultiBatteryHeadphones: NSObject {
+    @objc var isMultiBatteryDevice: Bool { true }
 }

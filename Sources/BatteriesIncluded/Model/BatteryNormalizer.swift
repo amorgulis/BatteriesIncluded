@@ -90,18 +90,39 @@ struct BatteryNormalizer: Sendable {
             }
         }
 
+        let headphoneComponents: [BatteryComponent] = [.left, .right, .case]
+        let hasExplicitComponents = newestFirst.contains {
+            $0.component != .whole && $0.source != .system && isValid($0, now: now)
+        }
+        if category == .headphones,
+           let wholePercentage = selected[.whole]?.percentage, wholePercentage > 0,
+           !hasExplicitComponents,
+           headphoneComponents.allSatisfy({
+               selected[$0]?.source == .system && selected[$0]?.percentage == 0
+           }) {
+            // Generic Bluetooth selectors can expose placeholder zeros for headphones
+            // with one battery. Prefer the positive overall reading in that case.
+            for component in headphoneComponents {
+                selected.removeValue(forKey: component)
+            }
+        }
+
         if selected.keys.contains(where: { $0 != .whole }) {
             selected.removeValue(forKey: .whole)
         }
 
-        let levels = selected.map { (component: $0.key, percentage: $0.value.percentage!) }
+        let levels = selected.compactMap { component, observation in
+            observation.percentage.map { (component: component, percentage: $0) }
+        }
             .sorted { $0.component < $1.component }
+        let coarseLevel = levels.isEmpty ? selected[.whole]?.coarseLevel : nil
 
         return DeviceBattery(
             id: normalizedID(for: observations[0]),
             name: name,
             category: category,
-            levels: levels
+            levels: levels,
+            coarseLevel: coarseLevel
         )
     }
 
@@ -113,7 +134,8 @@ struct BatteryNormalizer: Sendable {
     }
 
     private func isValid(_ observation: BatteryObservation, now: Date) -> Bool {
-        guard let percentage = observation.percentage, (0...100).contains(percentage) else {
+        guard observation.percentage.map({ (0...100).contains($0) }) == true ||
+              observation.coarseLevel != nil else {
             return false
         }
         let age = now.timeIntervalSince(observation.observedAt)
@@ -121,6 +143,9 @@ struct BatteryNormalizer: Sendable {
     }
 
     private func isPreferred(_ candidate: BatteryObservation, over existing: BatteryObservation) -> Bool {
+        if (candidate.percentage != nil) != (existing.percentage != nil) {
+            return candidate.percentage != nil
+        }
         if candidate.source == .systemProfiler || existing.source == .systemProfiler {
             return candidate.source.rawValue > existing.source.rawValue
         }

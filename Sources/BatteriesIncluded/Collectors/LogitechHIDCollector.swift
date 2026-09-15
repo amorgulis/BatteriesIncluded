@@ -1,172 +1,171 @@
 import Foundation
 
-struct LogitechDeviceReading: Sendable {
+protocol HIDPPTransport: Sendable {
+    func request(_ report: [UInt8]) async -> [UInt8]?
+    func prepare(deviceIndex: UInt8) async
+}
+
+extension HIDPPTransport {
+    func prepare(deviceIndex: UInt8) async {}
+}
+
+struct LogitechHIDEndpoint: Sendable {
     let id: String
     let name: String
-    let batteryLevel: Int?
     let category: DeviceCategory
+    let deviceIndices: [UInt8]
+    let transport: any HIDPPTransport
+}
+
+protocol LogitechHIDDiscovering: Sendable {
+    func discover() async -> [LogitechHIDEndpoint]
 }
 
 actor LogitechHIDCollector: BatteryCollecting {
-    private struct Receiver {
-        let productID: UInt16
-        let interfaceNumber: Int32
-    }
+    private let discovery: any LogitechHIDDiscovering
+    private let now: @Sendable () -> Date
+    private var nextSoftwareID: UInt8 = 8
 
-    private static let receivers: [Receiver] = [
-        .init(productID: 0xC548, interfaceNumber: 2),
-        .init(productID: 0xC52B, interfaceNumber: 2),
-        .init(productID: 0xC532, interfaceNumber: 2),
-        .init(productID: 0xC52F, interfaceNumber: 1),
-        .init(productID: 0xC518, interfaceNumber: 1),
-        .init(productID: 0xC51A, interfaceNumber: 1),
-        .init(productID: 0xC51B, interfaceNumber: 1),
-        .init(productID: 0xC521, interfaceNumber: 1),
-        .init(productID: 0xC525, interfaceNumber: 1),
-        .init(productID: 0xC526, interfaceNumber: 1),
-        .init(productID: 0xC52E, interfaceNumber: 1),
-        .init(productID: 0xC531, interfaceNumber: 1),
-        .init(productID: 0xC534, interfaceNumber: 1),
-        .init(productID: 0xC535, interfaceNumber: 1),
-        .init(productID: 0xC537, interfaceNumber: 1),
-        .init(productID: 0xC539, interfaceNumber: 2),
-        .init(productID: 0xC53A, interfaceNumber: 2),
-        .init(productID: 0xC53D, interfaceNumber: 2),
-        .init(productID: 0xC53F, interfaceNumber: 2),
-        .init(productID: 0xC541, interfaceNumber: 2),
-        .init(productID: 0xC545, interfaceNumber: 2),
-        .init(productID: 0xC547, interfaceNumber: 2),
-        .init(productID: 0xC54D, interfaceNumber: 2)
-    ]
-
-    private static let directProductRanges: [ClosedRange<UInt16>] = [
-        0xC07D...0xC094, 0xC32B...0xC344, 0xC08B...0xC0B0
-    ]
-
-    private let manager: HIDManager?
-
-    init(manager: HIDManager? = HIDManager()) {
-        self.manager = manager
+    init(
+        discovery: any LogitechHIDDiscovering = IOKitLogitechHIDDiscovery(),
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.discovery = discovery
+        self.now = now
     }
 
     func collect() async -> CollectorSnapshot {
-        guard let manager else {
-            SystemLogging.logitechHID.error("Unable to initialize I/O HID manager")
-            return CollectorSnapshot(availability: .available, observations: [])
-        }
-        let observedAt = Date()
-        let readings = scan(manager, deadline: observedAt.addingTimeInterval(2))
-        SystemLogging.logitechHID.info(
-            "Collected \(readings.count, privacy: .public) Logitech HID++ devices"
-        )
-        return CollectorSnapshot(
-            availability: .available,
-            observations: readings.map { Self.map($0, observedAt: observedAt) }
-        )
-    }
+        let endpoints = await discovery.discover()
+        var observations: [BatteryObservation] = []
 
-    nonisolated static func map(
-        _ reading: LogitechDeviceReading, observedAt: Date
-    ) -> BatteryObservation {
-        BatteryObservation(
-            sourceID: reading.id,
-            stableID: nil,
-            name: reading.name,
-            isConnected: true,
-            category: reading.category,
-            component: .whole,
-            percentage: reading.batteryLevel,
-            source: .logitechHID,
-            observedAt: observedAt
-        )
-    }
+        for endpoint in endpoints {
+            for deviceIndex in endpoint.deviceIndices {
+                await endpoint.transport.prepare(deviceIndex: deviceIndex)
+                guard let battery = await readBattery(
+                    deviceIndex: deviceIndex,
+                    transport: endpoint.transport
+                ) else { continue }
 
-    nonisolated static func category(for name: String) -> DeviceCategory {
-        let name = name.lowercased()
-        if name.contains("mouse") || name.contains("master") || name.contains("anywhere") ||
-            name.contains("superlight") || name.contains("trackball") {
-            return .mouse
-        }
-        if name.contains("keyboard") || name.contains("keys") || name.contains("craft") {
-            return .keyboard
-        }
-        if name.contains("headset") || name.contains("headphone") || name.contains("zone") ||
-            name.contains("g pro x wireless") {
-            return .headphones
-        }
-        if name.contains("gamepad") || name.contains("controller") { return .gameController }
-        return .other
-    }
-
-    private func scan(_ manager: HIDManager, deadline: Date) -> [LogitechDeviceReading] {
-        let descriptors = manager.enumerate(vendorID: logitechVendorID)
-        var readings: [LogitechDeviceReading] = []
-        var hidpp = HIDPPProtocol(operationDeadline: deadline)
-
-        for receiver in Self.receivers {
-            guard Date() < deadline, !Task.isCancelled else { break }
-            for descriptor in descriptors where
-                descriptor.productID == receiver.productID &&
-                descriptor.interfaceNumber == receiver.interfaceNumber {
-                guard Date() < deadline, !Task.isCancelled else { break }
-                readings.append(contentsOf: scanReceiver(
-                    descriptor, manager: manager, hidpp: &hidpp, deadline: deadline
+                let isReceiverSlot = deviceIndex != 0xFF
+                let name = isReceiverSlot
+                    ? await readName(deviceIndex: deviceIndex, transport: endpoint.transport) ?? "Logitech Device \(deviceIndex)"
+                    : endpoint.name
+                let sourceID = "\(endpoint.id):\(deviceIndex)"
+                observations.append(BatteryObservation(
+                    sourceID: sourceID,
+                    stableID: "logitech:\(sourceID)",
+                    name: name,
+                    isConnected: true,
+                    category: endpoint.category,
+                    component: .whole,
+                    percentage: battery.percentage,
+                    source: .logitechHID,
+                    observedAt: now(),
+                    coarseLevel: battery.coarseLevel
                 ))
             }
         }
 
-        for descriptor in descriptors where isDirectDevice(descriptor) {
-            guard Date() < deadline, !Task.isCancelled else { break }
-            if let reading = scanDirectDevice(
-                descriptor, manager: manager, hidpp: &hidpp
-            ) {
-                readings.append(reading)
+        return CollectorSnapshot(availability: .available, observations: observations)
+    }
+
+    private func readBattery(
+        deviceIndex: UInt8,
+        transport: any HIDPPTransport
+    ) async -> HIDPPBatteryValue? {
+        let features: [(UInt16, UInt8, ([UInt8]) -> HIDPPBatteryValue?)] = [
+            (0x1004, 0x10, HIDPPProtocol.parseUnifiedBattery),
+            (0x1000, 0x00, HIDPPProtocol.parseBatteryStatus),
+            (0x1001, 0x00, HIDPPProtocol.parseBatteryVoltage)
+        ]
+
+        for (feature, function, parser) in features {
+            let featureRequest = makeRequest(
+                deviceIndex: deviceIndex,
+                command: 0,
+                address: 0,
+                parameters: [UInt8(feature >> 8), UInt8(feature & 0xFF)]
+            )
+            guard let featureReply = await transport.request(featureRequest),
+                  featureReply.count >= 5, featureReply[4] != 0 else { continue }
+            let request = makeRequest(
+                deviceIndex: deviceIndex,
+                command: featureReply[4],
+                address: function
+            )
+            if let reply = await transport.request(request), let value = parser(reply) {
+                return value
             }
         }
-        return readings
-    }
 
-    private func scanReceiver(
-        _ descriptor: HIDDeviceDescriptor, manager: HIDManager,
-        hidpp: inout HIDPPProtocol, deadline: Date
-    ) -> [LogitechDeviceReading] {
-        guard let handle = manager.open(descriptor) else { return [] }
-        var readings: [LogitechDeviceReading] = []
-        for deviceNumber: UInt8 in 1...6 {
-            guard Date() < deadline, !Task.isCancelled else { break }
-            guard let version = hidpp.ping(handle, deviceNumber: deviceNumber) else { continue }
-            let name = hidpp.name(handle, deviceNumber: deviceNumber, version: version)
-                ?? "Logitech Device \(deviceNumber)"
-            let battery = hidpp.battery(handle, deviceNumber: deviceNumber, version: version)
-            readings.append(LogitechDeviceReading(
-                id: "\(descriptor.path):\(deviceNumber)",
-                name: name,
-                batteryLevel: battery?.level,
-                category: Self.category(for: name)
-            ))
+        if let reply = await transport.request(HIDPPProtocol.registerRead(
+            deviceIndex: deviceIndex, register: 0x0D
+        )), let value = HIDPPProtocol.parseBatteryCharge(reply) {
+            return value
         }
-        return readings
+        if let reply = await transport.request(HIDPPProtocol.registerRead(
+            deviceIndex: deviceIndex, register: 0x07
+        )) {
+            return HIDPPProtocol.parseBatteryStatusRegister(reply)
+        }
+        return nil
     }
 
-    private func scanDirectDevice(
-        _ descriptor: HIDDeviceDescriptor, manager: HIDManager,
-        hidpp: inout HIDPPProtocol
-    ) -> LogitechDeviceReading? {
-        guard let handle = manager.open(descriptor),
-              let version = hidpp.ping(handle, deviceNumber: 0xFF) else { return nil }
-        let name = hidpp.name(handle, deviceNumber: 0xFF, version: version)
-            ?? descriptor.productName
-        let battery = hidpp.battery(handle, deviceNumber: 0xFF, version: version)
-        return LogitechDeviceReading(
-            id: "\(descriptor.path):255",
-            name: name,
-            batteryLevel: battery?.level,
-            category: Self.category(for: name)
+    private func readName(
+        deviceIndex: UInt8,
+        transport: any HIDPPTransport
+    ) async -> String? {
+        let featureRequest = makeRequest(
+            deviceIndex: deviceIndex, command: 0, address: 0, parameters: [0x00, 0x05]
+        )
+        guard let featureReply = await transport.request(featureRequest),
+              featureReply.count >= 5, featureReply[4] != 0 else { return nil }
+        let featureIndex = featureReply[4]
+        let lengthRequest = makeRequest(deviceIndex: deviceIndex, command: featureIndex, address: 0)
+        guard let lengthReply = await transport.request(lengthRequest), lengthReply.count >= 5 else { return nil }
+        let expectedLength = Int(lengthReply[4])
+        guard expectedLength > 0 else { return nil }
+
+        var nameBytes: [UInt8] = []
+        while nameBytes.count < expectedLength {
+            let request = makeRequest(
+                deviceIndex: deviceIndex, command: featureIndex, address: 0x10,
+                parameters: [UInt8(nameBytes.count)]
+            )
+            guard let reply = await transport.request(request), reply.count > 4 else { return nil }
+            let fragment = reply.dropFirst(4).prefix(expectedLength - nameBytes.count)
+            guard !fragment.isEmpty else { return nil }
+            nameBytes.append(contentsOf: fragment)
+        }
+        return String(bytes: nameBytes, encoding: .utf8)
+    }
+
+    private func makeRequest(
+        deviceIndex: UInt8,
+        command: UInt8,
+        address: UInt8,
+        parameters: [UInt8] = []
+    ) -> [UInt8] {
+        let softwareID = nextSoftwareID
+        nextSoftwareID = softwareID == 15 ? 8 : softwareID + 1
+        return HIDPPProtocol.shortRequest(
+            deviceIndex: deviceIndex,
+            command: command,
+            address: address,
+            parameters: parameters,
+            softwareID: softwareID
         )
     }
+}
 
-    private func isDirectDevice(_ descriptor: HIDDeviceDescriptor) -> Bool {
-        (descriptor.interfaceNumber == 1 || descriptor.interfaceNumber == 2) &&
-            Self.directProductRanges.contains { $0.contains(descriptor.productID) }
+private extension HIDPPBatteryValue {
+    var percentage: Int? {
+        if case .percentage(let value) = self { return value }
+        return nil
+    }
+
+    var coarseLevel: CoarseBatteryLevel? {
+        if case .coarse(let value) = self { return value }
+        return nil
     }
 }
