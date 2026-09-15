@@ -1,6 +1,6 @@
 import Foundation
 
-enum BatteryComponent: Hashable, Sendable, Comparable {
+enum BatteryComponent: Hashable, Sendable, Comparable, Codable {
     case whole, left, right, `case`, custom(String)
 
     private var sortKey: (Int, String) {
@@ -18,22 +18,22 @@ enum BatteryComponent: Hashable, Sendable, Comparable {
     }
 }
 
-enum BatterySource: Int, Sendable, Equatable {
+enum BatterySource: Int, Sendable, Equatable, Codable {
     case systemProfiler = -1
     case system = 0
     case coreBluetooth = 1
     case logitechHID = 2
 }
-enum CoarseBatteryLevel: String, Sendable, Equatable {
+enum CoarseBatteryLevel: String, Sendable, Equatable, Codable {
     case full = "Full"
     case good = "Good"
     case low = "Low"
     case critical = "Critical"
 }
-enum DeviceCategory: Sendable, Equatable { case headphones, mouse, keyboard, trackpad, gameController, other }
-enum BluetoothAvailability: Sendable, Equatable { case available, poweredOff, permissionDenied, unavailable }
+enum DeviceCategory: Sendable, Equatable, Codable { case headphones, mouse, keyboard, trackpad, gameController, other }
+enum BluetoothAvailability: Sendable, Equatable, Codable { case available, poweredOff, permissionDenied, unavailable }
 
-struct BatteryObservation: Sendable, Equatable {
+struct BatteryObservation: Sendable, Equatable, Codable {
     let sourceID: String
     let stableID: String?
     let name: String

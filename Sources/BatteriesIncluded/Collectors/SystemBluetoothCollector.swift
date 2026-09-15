@@ -25,7 +25,23 @@ actor SystemBluetoothCollector: BatteryCollecting {
         "BD_ADDR", "BTAddress", "Address"
     ]
 
+    private let runner: BluetoothHelperRunner
+
+    init(runner: BluetoothHelperRunner = .init()) {
+        self.runner = runner
+    }
+
     func collect() async -> CollectorSnapshot {
+        guard let data = await runner.run(),
+              let snapshot = try? JSONDecoder().decode(CollectorSnapshot.self, from: data) else {
+            SystemLogging.systemBluetooth.error("Bluetooth helper failed, timed out, or returned invalid data")
+            return CollectorSnapshot(availability: .unavailable, observations: [])
+        }
+        return snapshot
+    }
+
+    // Called only by the short-lived helper, never by the long-running app.
+    func collectInCurrentProcess() -> CollectorSnapshot {
         let availability = bluetoothAvailability()
         guard availability == .available else {
             return CollectorSnapshot(availability: availability, observations: [])

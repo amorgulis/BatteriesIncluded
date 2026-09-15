@@ -1,6 +1,6 @@
 import Foundation
 
-struct CollectorSnapshot: Sendable {
+struct CollectorSnapshot: Sendable, Codable {
     let availability: BluetoothAvailability
     let observations: [BatteryObservation]
 }
