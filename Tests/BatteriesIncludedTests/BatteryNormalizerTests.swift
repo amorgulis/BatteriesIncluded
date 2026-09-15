@@ -63,6 +63,56 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result[0].levels.map(\.percentage), [90])
     }
 
+    func testPositiveWholeReplacesPlaceholderHeadphoneZeros() {
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 80, source: .systemProfiler),
+            observation(component: .left, percentage: 0),
+            observation(component: .right, percentage: 0),
+            observation(component: .case, percentage: 0)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.whole])
+        XCTAssertEqual(result[0].levels.map(\.percentage), [80])
+    }
+
+    func testPreservesExplicitZeroComponentsFromSystemReport() {
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 80),
+            observation(component: .left, percentage: 0, source: .systemProfiler),
+            observation(component: .right, percentage: 0, source: .systemProfiler),
+            observation(component: .case, percentage: 0, source: .systemProfiler)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.left, .right, .case])
+        XCTAssertEqual(result[0].levels.map(\.percentage), [0, 0, 0])
+    }
+
+    func testPreservesEmptyComponentAlongsideChargedComponents() {
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 80),
+            observation(component: .left, percentage: 80),
+            observation(component: .right, percentage: 80),
+            observation(component: .case, percentage: 0)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.left, .right, .case])
+        XCTAssertEqual(result[0].levels.map(\.percentage), [80, 80, 0])
+    }
+
+    func testZeroComponentsRemainWithoutFreshPositiveWhole() {
+        for (percentage, age): (Int?, TimeInterval) in [(nil, 0), (0, 0), (80, 61)] {
+            let result = BatteryNormalizer().normalize([
+                observation(percentage: percentage, age: age),
+                observation(component: .left, percentage: 0),
+                observation(component: .right, percentage: 0),
+                observation(component: .case, percentage: 0)
+            ], now: Date(timeIntervalSince1970: 1_000))
+
+            XCTAssertEqual(result[0].levels.map(\.component), [.left, .right, .case])
+            XCTAssertEqual(result[0].levels.map(\.percentage), [0, 0, 0])
+        }
+    }
+
     func testPrefersBLEReadingWithinOneSecond() {
         let result = BatteryNormalizer().normalize([
             observation(percentage: 90, source: .system),
@@ -144,5 +194,49 @@ final class BatteryNormalizerTests: XCTestCase {
             observation(connected: false)
         ], now: Date(timeIntervalSince1970: 1_000))
         XCTAssertTrue(result.isEmpty)
+    }
+
+    func testKeepsFreshCoarseLevelWhenExactPercentageIsUnavailable() {
+        let result = BatteryNormalizer().normalize([
+            BatteryObservation(
+                sourceID: "receiver:1", stableID: "unit-1", name: "MX Keyboard",
+                isConnected: true, category: .keyboard, component: .whole,
+                percentage: nil, source: .logitechHID,
+                observedAt: Date(timeIntervalSince1970: 1_000), coarseLevel: .low
+            )
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertTrue(result[0].levels.isEmpty)
+        XCTAssertEqual(result[0].coarseLevel, .low)
+    }
+
+    func testExactPercentageOutranksNewerCoarseLevel() {
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 67, source: .system, age: 1),
+            BatteryObservation(
+                sourceID: "hid", stableID: "stable-1", name: "AirPods Pro",
+                isConnected: true, category: .headphones, component: .whole,
+                percentage: nil, source: .logitechHID,
+                observedAt: Date(timeIntervalSince1970: 1_000), coarseLevel: .good
+            )
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.first?.percentage, 67)
+        XCTAssertNil(result[0].coarseLevel)
+    }
+
+    func testMergesUniqueLogitechAndBluetoothGroupsWithSameName() {
+        let result = BatteryNormalizer().normalize([
+            observation(id: "bluetooth", stableID: "address", name: "MX Master", percentage: nil),
+            BatteryObservation(
+                sourceID: "hid", stableID: "unit", name: "MX Master", isConnected: true,
+                category: .mouse, component: .whole, percentage: 88,
+                source: .logitechHID, observedAt: Date(timeIntervalSince1970: 1_000)
+            )
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].levels.first?.percentage, 88)
     }
 }

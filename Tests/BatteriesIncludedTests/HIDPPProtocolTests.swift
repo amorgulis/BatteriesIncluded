@@ -2,77 +2,71 @@ import XCTest
 @testable import BatteriesIncluded
 
 final class HIDPPProtocolTests: XCTestCase {
-    private final class FixtureTransport: HIDPPTransport {
-        var writes: [[UInt8]] = []
-        var readTimeouts: [Int32] = []
-        var replies: [[UInt8]]
-
-        init(replies: [[UInt8]]) {
-            self.replies = replies
-        }
-
-        func write(_ data: [UInt8]) -> Int32 {
-            writes.append(data)
-            return Int32(data.count)
-        }
-
-        func read(maxLength: Int, timeoutMilliseconds: Int32) -> [UInt8]? {
-            readTimeouts.append(timeoutMilliseconds)
-            return replies.isEmpty ? nil : replies.removeFirst()
-        }
-    }
-
-    func testDecodesUnifiedBatteryPayload() {
+    func testPingRequestUsesFunctionOneAndEchoMarker() {
         XCTAssertEqual(
-            HIDPPBatteryDecoder.unifiedBattery(payload: [72, 4, 0]),
-            HIDPPBattery(level: 72, status: .discharging, voltage: nil)
+            HIDPPProtocol.pingRequest(deviceIndex: 1, marker: 0xA5),
+            [0x10, 1, 0, 0x18, 0, 0, 0xA5]
         )
     }
 
-    func testRejectsShortUnifiedBatteryPayload() {
-        XCTAssertNil(HIDPPBatteryDecoder.unifiedBattery(payload: [72, 4]))
-    }
-
-    func testEstimatesVoltageBatteryWithinBounds() {
+    func testShortRequestUsesHIDPPFramingAndSoftwareID() {
         XCTAssertEqual(
-            HIDPPBatteryDecoder.voltageBattery(payload: [0x0F, 0x0A, 1]),
-            HIDPPBattery(level: 50, status: .charging, voltage: 3850)
+            HIDPPProtocol.shortRequest(deviceIndex: 2, command: 0x00, address: 0x10, parameters: [0x10, 0x04]),
+            [0x10, 0x02, 0x00, 0x18, 0x10, 0x04, 0x00]
         )
     }
 
-    func testLegacyBatteryRequestPreservesRegisterAddress() {
-        let transport = FixtureTransport(replies: [[0x10, 1, 0x81, 0x07, 72, 0, 0]])
-        var hidpp = HIDPPProtocol(requestTimeout: 0.01)
-
-        let battery = hidpp.battery(transport, deviceNumber: 1, version: 1)
-
-        XCTAssertEqual(transport.writes.first, [0x10, 1, 0x81, 0x07, 0, 0, 0])
-        XCTAssertEqual(battery?.level, 72)
-    }
-
-    func testLegacyBatteryRequestIgnoresErrorForAnotherRegister() {
-        let transport = FixtureTransport(replies: [
-            [0x10, 1, 0x8F, 0x81, 0x0D, 0x09, 0],
-            [0x10, 1, 0x81, 0x07, 72, 0, 0]
-        ])
-        var hidpp = HIDPPProtocol(requestTimeout: 0.01)
-
-        let battery = hidpp.battery(transport, deviceNumber: 1, version: 1)
-
-        XCTAssertEqual(battery?.level, 72)
-    }
-
-    func testOperationDeadlineBoundsAnUnresponsiveRequest() {
-        let transport = FixtureTransport(replies: [])
-        var hidpp = HIDPPProtocol(
-            requestTimeout: 1,
-            operationDeadline: Date().addingTimeInterval(0.01)
+    func testParsesExactBatteryStatusResponse() {
+        XCTAssertEqual(
+            HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05, 0x08, 73, 60, 0]),
+            .percentage(73)
         )
-        let startedAt = Date()
+    }
 
-        XCTAssertNil(hidpp.ping(transport, deviceNumber: 1))
+    func testParsesUnifiedExactAndCoarseBatteryResponses() {
+        XCTAssertEqual(
+            HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 82, 4, 0]),
+            .percentage(82)
+        )
+        XCTAssertEqual(
+            HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 0, 2, 0]),
+            .coarse(.low)
+        )
+    }
 
-        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.1)
-        XCTAssertLessThanOrEqual(transport.readTimeouts.max() ?? .max, 10)
+    func testRejectsMalformedAndOutOfRangeBatteryResponses() {
+        XCTAssertNil(HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05]))
+        XCTAssertNil(HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05, 0x08, 101, 0, 0]))
+        XCTAssertNil(HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 0, 0, 0]))
+    }
+
+    func testParsesHIDPP10ExactAndCoarseRegisters() {
+        XCTAssertEqual(HIDPPProtocol.parseBatteryCharge([0x10, 1, 0x81, 0x0D, 64, 0, 0]), .percentage(64))
+        XCTAssertEqual(HIDPPProtocol.parseBatteryStatusRegister([0x10, 1, 0x81, 0x07, 5, 0, 0]), .coarse(.good))
+        XCTAssertEqual(HIDPPProtocol.parseBatteryStatusRegister([0x10, 1, 0x81, 0x07, 1, 0, 0]), .coarse(.critical))
+    }
+
+    func testInterpolatesBatteryVoltageToPercentage() {
+        XCTAssertEqual(
+            HIDPPProtocol.parseBatteryVoltage([0x10, 1, 5, 8, 0x0E, 0x57, 0]),
+            .percentage(10)
+        )
+    }
+
+    func testReplyMustMatchRequestSoftwareID() {
+        let request = HIDPPProtocol.shortRequest(
+            deviceIndex: 1, command: 5, address: 0x10, parameters: [], softwareID: 9
+        )
+
+        XCTAssertTrue(HIDPPProtocol.isReply([0x10, 1, 5, 0x19, 50, 0, 0], to: request))
+        XCTAssertFalse(HIDPPProtocol.isReply([0x10, 1, 5, 0x1A, 50, 0, 0], to: request))
+    }
+
+    func testErrorReplyMatchesOriginalRequest() {
+        let request = HIDPPProtocol.shortRequest(
+            deviceIndex: 2, command: 0, address: 0, parameters: [0x10, 0x04], softwareID: 9
+        )
+        XCTAssertTrue(HIDPPProtocol.isErrorReply([0x10, 2, 0x8F, 0, 9, 9, 0], to: request))
+        XCTAssertFalse(HIDPPProtocol.isErrorReply([0x10, 3, 0x8F, 0, 9, 9, 0], to: request))
     }
 }
