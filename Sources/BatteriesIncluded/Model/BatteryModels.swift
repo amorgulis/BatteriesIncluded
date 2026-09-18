@@ -30,6 +30,9 @@ enum CoarseBatteryLevel: String, Sendable, Equatable, Codable {
     case low = "Low"
     case critical = "Critical"
 }
+enum BatteryChargingState: String, Sendable, Equatable, Codable {
+    case charging, full, discharging, unknown
+}
 enum DeviceCategory: Sendable, Equatable, Codable { case headphones, mouse, keyboard, trackpad, gameController, other }
 enum BluetoothAvailability: Sendable, Equatable, Codable { case available, poweredOff, permissionDenied, unavailable }
 
@@ -44,6 +47,7 @@ struct BatteryObservation: Sendable, Equatable, Codable {
     let source: BatterySource
     let observedAt: Date
     var coarseLevel: CoarseBatteryLevel? = nil
+    var chargingState: BatteryChargingState? = nil
 }
 
 struct DeviceBattery: Identifiable, Sendable, Equatable {
@@ -52,11 +56,12 @@ struct DeviceBattery: Identifiable, Sendable, Equatable {
     let category: DeviceCategory
     let levels: [(component: BatteryComponent, percentage: Int)]
     var coarseLevel: CoarseBatteryLevel? = nil
+    var chargingState: BatteryChargingState? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.category == rhs.category &&
         lhs.levels.map { "\($0.component):\($0.percentage)" } == rhs.levels.map { "\($0.component):\($0.percentage)" } &&
-        lhs.coarseLevel == rhs.coarseLevel
+        lhs.coarseLevel == rhs.coarseLevel && lhs.chargingState == rhs.chargingState
     }
 
     static func componentSummary(_ levels: [(BatteryComponent, Int)]) -> String {

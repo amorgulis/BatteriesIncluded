@@ -116,13 +116,22 @@ struct BatteryNormalizer: Sendable {
         }
             .sorted { $0.component < $1.component }
         let coarseLevel = levels.isEmpty ? selected[.whole]?.coarseLevel : nil
+        // Status may be available even when another source supplies a better level.
+        // Keep the newest explicit report, including unknown, so old charging flags
+        // cannot survive a newer report that no longer confirms them.
+        let chargingState = selected.keys.contains(where: { $0 != .whole }) ? nil :
+            newestFirst.first(where: {
+                $0.component == .whole && $0.chargingState != nil &&
+                now.timeIntervalSince($0.observedAt) <= 60
+            })?.chargingState
 
         return DeviceBattery(
             id: normalizedID(for: observations[0]),
             name: name,
             category: category,
             levels: levels,
-            coarseLevel: coarseLevel
+            coarseLevel: coarseLevel,
+            chargingState: chargingState
         )
     }
 

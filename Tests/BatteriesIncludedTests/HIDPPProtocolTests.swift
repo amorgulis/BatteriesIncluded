@@ -18,37 +18,37 @@ final class HIDPPProtocolTests: XCTestCase {
 
     func testParsesExactBatteryStatusResponse() {
         XCTAssertEqual(
-            HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05, 0x08, 73, 60, 0]),
+            HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05, 0x08, 73, 60, 0])?.level,
             .percentage(73)
         )
     }
 
     func testParsesUnifiedExactAndCoarseBatteryResponses() {
         XCTAssertEqual(
-            HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 82, 4, 0]),
+            HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 82, 4, 0])?.level,
             .percentage(82)
         )
         XCTAssertEqual(
-            HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 0, 2, 0]),
+            HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 0, 2, 0])?.level,
             .coarse(.low)
         )
     }
 
     func testRejectsMalformedAndOutOfRangeBatteryResponses() {
-        XCTAssertNil(HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05]))
-        XCTAssertNil(HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05, 0x08, 101, 0, 0]))
-        XCTAssertNil(HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 0, 0, 0]))
+        XCTAssertNil(HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05])?.level)
+        XCTAssertNil(HIDPPProtocol.parseBatteryStatus([0x10, 0x01, 0x05, 0x08, 101, 0, 0])?.level)
+        XCTAssertNil(HIDPPProtocol.parseUnifiedBattery([0x10, 0x01, 0x07, 0x18, 0, 0, 0])?.level)
     }
 
     func testParsesHIDPP10ExactAndCoarseRegisters() {
-        XCTAssertEqual(HIDPPProtocol.parseBatteryCharge([0x10, 1, 0x81, 0x0D, 64, 0, 0]), .percentage(64))
-        XCTAssertEqual(HIDPPProtocol.parseBatteryStatusRegister([0x10, 1, 0x81, 0x07, 5, 0, 0]), .coarse(.good))
-        XCTAssertEqual(HIDPPProtocol.parseBatteryStatusRegister([0x10, 1, 0x81, 0x07, 1, 0, 0]), .coarse(.critical))
+        XCTAssertEqual(HIDPPProtocol.parseBatteryCharge([0x10, 1, 0x81, 0x0D, 64, 0, 0])?.level, .percentage(64))
+        XCTAssertEqual(HIDPPProtocol.parseBatteryStatusRegister([0x10, 1, 0x81, 0x07, 5, 0, 0])?.level, .coarse(.good))
+        XCTAssertEqual(HIDPPProtocol.parseBatteryStatusRegister([0x10, 1, 0x81, 0x07, 1, 0, 0])?.level, .coarse(.critical))
     }
 
     func testInterpolatesBatteryVoltageToPercentage() {
         XCTAssertEqual(
-            HIDPPProtocol.parseBatteryVoltage([0x10, 1, 5, 8, 0x0E, 0x57, 0]),
+            HIDPPProtocol.parseBatteryVoltage([0x10, 1, 5, 8, 0x0E, 0x57, 0])?.level,
             .percentage(10)
         )
     }

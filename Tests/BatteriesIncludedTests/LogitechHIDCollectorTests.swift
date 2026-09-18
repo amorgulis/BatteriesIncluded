@@ -29,6 +29,79 @@ private struct FixtureLogitechDiscovery: LogitechHIDDiscovering {
 }
 
 final class LogitechHIDCollectorTests: XCTestCase {
+    func testStatusOnlyReplyStillFallsBackForBatteryLevel() async {
+        for fallback: [[UInt8]?] in [
+            [[0x10, 0xFF, 0, 8, 6, 0, 0], [0x10, 0xFF, 6, 9, 73, 60, 0]],
+            [nil, nil, [0x10, 0xFF, 0x81, 0x0D, 73, 0, 0]],
+            [nil, nil, nil, [0x10, 0xFF, 0x81, 0x07, 5, 0, 0]]
+        ] {
+            let transport = QueuedHIDPPTransport([
+                [0x10, 0xFF, 0, 8, 5, 0, 0],
+                [0x10, 0xFF, 5, 9, 0, 0, 1]
+            ] + fallback)
+            let endpoint = LogitechHIDEndpoint(
+                id: "usb:123", name: "MX", category: .mouse,
+                deviceIndices: [0xFF], transport: transport
+            )
+            let capturedAt = Date(timeIntervalSince1970: 1_000)
+            let collector = LogitechHIDCollector(
+                discovery: FixtureLogitechDiscovery(endpoints: [endpoint]), now: { capturedAt }
+            )
+            let snapshot = await collector.collect()
+            let device = BatteryNormalizer().normalize(snapshot.observations, now: capturedAt).first
+            XCTAssertEqual(device?.chargingState, .charging)
+            XCTAssertEqual(device?.primaryBatteryText, fallback.count == 4 ? "Good" : "73%")
+        }
+    }
+
+    func testChargingReportsReachMenuWithoutInferringStatusFromPercentage() async {
+        let cases: [(Int, [UInt8], String)] = [
+            (0, [76, 4, 1], "76% · ⚡ Charging"),
+            (0, [99, 8, 2], "99% · ⚡ Charging"),
+            (0, [100, 8, 3], "100% · Fully charged"),
+            (0, [15, 2, 4], "15% · ⚡ Charging"),
+            (0, [100, 8, 0], "100% · Discharging"),
+            (0, [76, 4, 5], "76%"),
+            (0, [76, 4, 6], "76%"),
+            (0, [76, 4, 255], "76%"),
+            (0, [76, 4], "76%"),
+            (0, [0, 2, 1], "Low · ⚡ Charging"),
+            (0, [0, 0, 1], "Battery unavailable · ⚡ Charging"),
+            (1, [73, 60, 1], "73% · ⚡ Charging"),
+            (1, [0, 0, 1], "Battery unavailable · ⚡ Charging"),
+            (2, [0x0E, 0x57, 0x80], "10% · ⚡ Charging"),
+            (2, [0x0E, 0x57, 0x81], "10% · Fully charged"),
+            (2, [0x0E, 0x57, 0], "10% · Discharging"),
+            (3, [64, 0, 0x50], "64% · ⚡ Charging"),
+            (3, [100, 0, 0x90], "100% · Fully charged"),
+            (3, [64, 0, 0x30], "64% · Discharging"),
+            (4, [5, 0x21, 0], "Good · ⚡ Charging"),
+            (4, [7, 0x22, 0], "Full · Fully charged"),
+            (4, [3, 0, 0], "Low · Discharging"),
+            (4, [0, 0x21, 0], "Battery unavailable · ⚡ Charging")
+        ]
+        let capturedAt = Date(timeIntervalSince1970: 1_000)
+        for (feature, payload, expected) in cases {
+            var replies: [[UInt8]?] = Array(repeating: nil, count: feature)
+            if feature < 3 { replies.append([0x10, 0xFF, 0, 8, 5, 0, 0]) }
+            replies.append([0x10, 0xFF, 5, 9] + payload)
+            let endpoint = LogitechHIDEndpoint(
+                id: "usb:123", name: "MX", category: .mouse,
+                deviceIndices: [0xFF], transport: QueuedHIDPPTransport(replies)
+            )
+            let collector = LogitechHIDCollector(
+                discovery: FixtureLogitechDiscovery(endpoints: [endpoint]), now: { capturedAt }
+            )
+            let snapshot = await collector.collect()
+            let devices = BatteryNormalizer().normalize(snapshot.observations, now: capturedAt)
+            XCTAssertEqual(devices.first?.menuRowText, "MX — " + expected, "feature \(feature), \(payload)")
+            let stale = BatteryNormalizer().normalize(snapshot.observations, now: capturedAt.addingTimeInterval(61))
+            if let device = stale.first {
+                XCTAssertEqual(device.menuRowText, "MX — Battery unavailable")
+            }
+        }
+    }
+
     func testRootFeatureLookupUsesFunctionZero() async {
         let transport = RecordingHIDPPTransport()
         let endpoint = LogitechHIDEndpoint(
@@ -67,7 +140,7 @@ final class LogitechHIDCollectorTests: XCTestCase {
                 sourceID: "usb:123:255", stableID: "logitech:usb:123:255",
                 name: "MX Master 3S", isConnected: true, category: .mouse,
                 component: .whole, percentage: 76, source: .logitechHID,
-                observedAt: capturedAt
+                observedAt: capturedAt, chargingState: .discharging
             )
         ])
     }

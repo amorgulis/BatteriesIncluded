@@ -50,3 +50,9 @@ Battery support is best-effort: macOS and the connected peripheral must expose
 a battery value. Logitech HID++ 1.0 and 2.0 devices can report either exact
 percentages or coarse levels such as `Good` and `Low`. Bluetooth devices without
 a readable value remain visible as `Battery unavailable`.
+
+Supported Logitech reports also expose charging state. The menu shows
+`⚡ Charging`, `Fully charged`, or `Discharging` when the device explicitly
+reports that state. Unknown or unsupported charging state adds no indicator;
+a 100% battery level alone does not imply that charging has completed.
+Charging status refreshes with battery levels (every 30 seconds or via Refresh).
