@@ -226,6 +226,42 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertNil(result[0].coarseLevel)
     }
 
+    func testPreservesChargingStatusWhenAnotherSourceSuppliesExactLevel() {
+        var hid = observation(percentage: nil, source: .logitechHID)
+        hid.coarseLevel = .good
+        hid.chargingState = .charging
+        let result = BatteryNormalizer().normalize([
+            observation(percentage: 67, source: .system, age: 1), hid
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.first?.percentage, 67)
+        XCTAssertEqual(result[0].chargingState, .charging)
+    }
+
+    func testNewerUnknownStatusClearsOlderChargingReport() {
+        var older = observation(source: .logitechHID, age: 1)
+        older.chargingState = .charging
+        var newer = observation(source: .logitechHID)
+        newer.chargingState = .unknown
+        let result = BatteryNormalizer().normalize(
+            [older, newer], now: Date(timeIntervalSince1970: 1_000)
+        )
+
+        XCTAssertEqual(result[0].chargingState, .unknown)
+        XCTAssertFalse(result[0].menuRowText.contains("Charging"))
+    }
+
+    func testDoesNotApplyWholeDeviceChargingStatusToIndividualComponents() {
+        var whole = observation(source: .logitechHID)
+        whole.chargingState = .charging
+        let result = BatteryNormalizer().normalize([
+            whole, observation(component: .left, percentage: 80)
+        ], now: Date(timeIntervalSince1970: 1_000))
+
+        XCTAssertEqual(result[0].levels.map(\.component), [.left])
+        XCTAssertNil(result[0].chargingState)
+    }
+
     func testMergesUniqueLogitechAndBluetoothGroupsWithSameName() {
         let result = BatteryNormalizer().normalize([
             observation(id: "bluetooth", stableID: "address", name: "MX Master", percentage: nil),

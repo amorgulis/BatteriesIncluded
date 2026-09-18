@@ -61,7 +61,8 @@ actor LogitechHIDCollector: BatteryCollecting {
                     percentage: battery.percentage,
                     source: .logitechHID,
                     observedAt: now(),
-                    coarseLevel: battery.coarseLevel
+                    coarseLevel: battery.coarseLevel,
+                    chargingState: battery.chargingState
                 ))
             }
         }
@@ -72,12 +73,13 @@ actor LogitechHIDCollector: BatteryCollecting {
     private func readBattery(
         deviceIndex: UInt8,
         transport: any HIDPPTransport
-    ) async -> HIDPPBatteryValue? {
-        let features: [(UInt16, UInt8, ([UInt8]) -> HIDPPBatteryValue?)] = [
+    ) async -> HIDPPBatteryReading? {
+        let features: [(UInt16, UInt8, ([UInt8]) -> HIDPPBatteryReading?)] = [
             (0x1004, 0x10, HIDPPProtocol.parseUnifiedBattery),
             (0x1000, 0x00, HIDPPProtocol.parseBatteryStatus),
             (0x1001, 0x00, HIDPPProtocol.parseBatteryVoltage)
         ]
+        var statusOnly: HIDPPBatteryReading?
 
         for (feature, function, parser) in features {
             let featureRequest = makeRequest(
@@ -94,21 +96,33 @@ actor LogitechHIDCollector: BatteryCollecting {
                 address: function
             )
             if let reply = await transport.request(request), let value = parser(reply) {
-                return value
+                if value.level != nil {
+                    return HIDPPBatteryReading(
+                        level: value.level,
+                        chargingState: statusOnly?.chargingState ?? value.chargingState
+                    )
+                }
+                statusOnly = statusOnly ?? value
             }
         }
 
         if let reply = await transport.request(HIDPPProtocol.registerRead(
             deviceIndex: deviceIndex, register: 0x0D
         )), let value = HIDPPProtocol.parseBatteryCharge(reply) {
-            return value
+            return HIDPPBatteryReading(
+                level: value.level,
+                chargingState: statusOnly?.chargingState ?? value.chargingState
+            )
         }
         if let reply = await transport.request(HIDPPProtocol.registerRead(
             deviceIndex: deviceIndex, register: 0x07
-        )) {
-            return HIDPPProtocol.parseBatteryStatusRegister(reply)
+        )), let value = HIDPPProtocol.parseBatteryStatusRegister(reply) {
+            return HIDPPBatteryReading(
+                level: value.level,
+                chargingState: statusOnly?.chargingState ?? value.chargingState
+            )
         }
-        return nil
+        return statusOnly
     }
 
     private func readName(
@@ -158,14 +172,14 @@ actor LogitechHIDCollector: BatteryCollecting {
     }
 }
 
-private extension HIDPPBatteryValue {
+private extension HIDPPBatteryReading {
     var percentage: Int? {
-        if case .percentage(let value) = self { return value }
+        if case .percentage(let value) = level { return value }
         return nil
     }
 
     var coarseLevel: CoarseBatteryLevel? {
-        if case .coarse(let value) = self { return value }
+        if case .coarse(let value) = level { return value }
         return nil
     }
 }

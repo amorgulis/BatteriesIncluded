@@ -11,7 +11,13 @@ extension DeviceBattery {
     }
 
     var menuRowText: String {
-        "\(name) — \(primaryBatteryText)"
+        let batteryText = "\(name) — \(primaryBatteryText)"
+        switch chargingState {
+        case .charging: return "\(batteryText) · ⚡ Charging"
+        case .full: return "\(batteryText) · Fully charged"
+        case .discharging: return "\(batteryText) · Discharging"
+        case .unknown, nil: return batteryText
+        }
     }
 }
 
