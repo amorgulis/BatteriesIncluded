@@ -56,3 +56,23 @@ Supported Logitech reports also expose charging state. The menu shows
 reports that state. Unknown or unsupported charging state adds no indicator;
 a 100% battery level alone does not imply that charging has completed.
 Charging status refreshes with battery levels (every 30 seconds or via Refresh).
+
+Bluetooth charging support uses two sources when available:
+
+- The optional BLE Battery Level Status characteristic (`0x2BED`) reports
+  charging or discharging directly. Devices exposing only Battery Level
+  (`0x2A19`) still report percentages, but their charging state is unknown.
+- macOS accessory power reports can supply charging/full states for connected
+  Bluetooth accessories, including separate left, right, and case batteries.
+  Accessory lookup is optional and checked at runtime because Apple exposes
+  it through a private API.
+
+Each component's charging indicator appears beside its own level. Missing,
+malformed, or stale status is not inferred from a battery percentage or from
+external power alone. Device and firmware support determines which states
+are available; this does not make charging detection universal.
+
+Protocol references: [Bluetooth Battery Service 1.1](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/BAS_v1.1/out/en/index-en.html),
+[GATT characteristic formats](https://btprodspecificationrefs.blob.core.windows.net/gatt-specification-supplement/GATT_Specification_Supplement.pdf),
+and Apple's [accessory power API](https://github.com/apple-oss-distributions/IOKitUser/blob/main/ps.subproj/IOPowerSourcesPrivate.h)
+and [accessory keys](https://github.com/apple-oss-distributions/IOKitUser/blob/main/ps.subproj/IOPSKeysPrivate.h).

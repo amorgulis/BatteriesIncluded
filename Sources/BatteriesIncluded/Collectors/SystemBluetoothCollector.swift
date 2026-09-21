@@ -8,7 +8,8 @@ struct SystemDeviceReading: Sendable {
     let name: String
     let isConnected: Bool
     let category: DeviceCategory
-    let percentages: [BatteryComponent: Int?]
+    var percentages: [BatteryComponent: Int?]
+    var chargingStates: [BatteryComponent: BatteryChargingState] = [:]
     var isMultiBatteryDevice: Bool? = nil
 }
 
@@ -77,7 +78,8 @@ actor SystemBluetoothCollector: BatteryCollecting {
 
         return CollectorSnapshot(
             availability: availability,
-            observations: readings.flatMap { Self.map($0, now: .now) }
+            observations: AccessoryPowerSources.enrich(readings, descriptions: AccessoryPowerSources.descriptions())
+                .flatMap { Self.map($0, now: .now) }
         )
     }
 
@@ -87,20 +89,18 @@ actor SystemBluetoothCollector: BatteryCollecting {
         let address = normalizedAddress(reading.address)
         guard !address.isEmpty else { return [] }
 
-        let relevantPercentages = reading.percentages.filter { component, _ in
-            component == .whole ||
-                (reading.category == .headphones && reading.isMultiBatteryDevice != false)
-        }
-        let levels = relevantPercentages.compactMap { component, percentage in
-            percentage.map { (component, $0) }
-        }.sorted { $0.0 < $1.0 }
-
-        if levels.isEmpty {
+        let components = Set(reading.percentages.compactMap { $0.value == nil ? nil : $0.key })
+            .union(reading.chargingStates.keys)
+            .filter { component in
+                component == .whole || reading.chargingStates[component] != nil ||
+                    (reading.category == .headphones && reading.isMultiBatteryDevice != false)
+            }.sorted()
+        if components.isEmpty {
             return [observation(from: reading, address: address, component: .whole, percentage: nil, now: now)]
         }
-
-        return levels.map { component, percentage in
-            observation(from: reading, address: address, component: component, percentage: percentage, now: now)
+        return components.map { component in
+            observation(from: reading, address: address, component: component,
+                        percentage: reading.percentages[component] ?? nil, now: now)
         }
     }
 
@@ -120,7 +120,8 @@ actor SystemBluetoothCollector: BatteryCollecting {
             component: component,
             percentage: percentage,
             source: .system,
-            observedAt: now
+            observedAt: now,
+            chargingState: reading.chargingStates[component]
         )
     }
 
