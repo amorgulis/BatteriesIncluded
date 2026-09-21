@@ -3,6 +3,39 @@ import XCTest
 @testable import BatteriesIncluded
 
 final class CoreBluetoothCollectorTests: XCTestCase {
+    func testLatePartialReplyCannotReplaceCompletedChargingResult() async {
+        for resolveFirst in [true, false] {
+            let capturedAt = Date(timeIntervalSince1970: 1_000)
+            let state = CoreBluetoothCollectionState(now: { capturedAt })
+            let bridge = TestBLECollectionBridge()
+            var requests = bridge.requestIDs.makeAsyncIterator()
+            let first = reading(identifier: UUID(), level: nil)
+            let second = reading(identifier: UUID(), level: nil)
+            let collection = Task { await state.collect(using: bridge) }
+            let request = await requests.next()!
+            if resolveFirst {
+                await state.resolve(requestID: request, generation: 0, availability: .available,
+                                    devices: [first, second], waitForFreshRead: true)
+            }
+            var completed = reading(identifier: first.identifier, level: 70)
+            completed.chargingState = .charging
+            completed.chargingObservedAt = capturedAt
+            await state.record(completed, for: [request], generation: 0)
+            await state.record(reading(identifier: first.identifier, level: 70),
+                               for: [request], generation: 0, operationFinished: false)
+            if !resolveFirst {
+                await state.resolve(requestID: request, generation: 0, availability: .available,
+                                    devices: [first, second], waitForFreshRead: true)
+            }
+            await state.record(reading(identifier: second.identifier, level: 80),
+                               for: [request], generation: 0)
+            let snapshot = await collection.value
+            let observation = snapshot.observations.first { $0.stableID == first.identifier.uuidString }
+            XCTAssertEqual(observation?.percentage, 70)
+            XCTAssertEqual(observation?.chargingState, .charging)
+        }
+    }
+
     func testMapsStandardBatteryLevelCharacteristic() {
         let reading = BLEDeviceReading(
             identifier: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
@@ -612,6 +645,74 @@ final class CoreBluetoothCollectorTests: XCTestCase {
 
         XCTAssertEqual(registry.cancel(requestID: requestID), ["Peripheral"])
         XCTAssertTrue(registry.retainedIdentifiers.isEmpty)
+    }
+
+    func testFreshLevelCacheWaitsForStatusAndTimeoutPreservesPartialLevel() async {
+        let state = CoreBluetoothCollectionState(timeoutNanoseconds: 60_000_000_000)
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let device = reading(identifier: UUID(), level: nil)
+        await state.record(reading(identifier: device.identifier, level: 20), for: [], generation: 0)
+        let collection = Task { await state.collect(using: bridge) }
+        let request = await requests.next()!
+        await state.resolve(requestID: request, generation: 0, availability: .available,
+                            devices: [device], waitForFreshRead: true)
+        XCTAssertEqual(bridge.cancelCount(for: request), 0)
+        await state.record(reading(identifier: device.identifier, level: 73), for: [request],
+                           generation: 0, operationFinished: false)
+        XCTAssertEqual(bridge.cancelCount(for: request), 0)
+        await state.timeOut(request)
+        let snapshot = await collection.value
+        XCTAssertEqual(snapshot.observations.single?.percentage, 73)
+        XCTAssertNil(snapshot.observations.single?.chargingState)
+    }
+
+    func testChargingTimestampIsNotRenewedByLaterLevelAndDoesNotSurviveNextRead() async {
+        let clock = TestDateClock(Date(timeIntervalSince1970: 1_000))
+        let state = CoreBluetoothCollectionState(timeoutNanoseconds: 60_000_000_000, now: { clock.current })
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let device = reading(identifier: UUID(), level: nil)
+        let collection = Task { await state.collect(using: bridge) }
+        let request = await requests.next()!
+        await state.resolve(requestID: request, generation: 0, availability: .available,
+                            devices: [device], waitForFreshRead: true)
+        let statusDate = clock.current
+        await state.record(BLEDeviceReading(identifier: device.identifier, name: device.name,
+            isConnected: true, batteryLevel: nil, chargingState: .charging, chargingObservedAt: statusDate),
+            for: [request], generation: 0, operationFinished: false)
+        clock.advance(by: 4)
+        await state.record(BLEDeviceReading(identifier: device.identifier, name: device.name,
+            isConnected: true, batteryLevel: 70, chargingState: .charging, chargingObservedAt: statusDate),
+            for: [request], generation: 0)
+        let snapshot = await collection.value
+        XCTAssertEqual(snapshot.observations.single?.chargingState, .charging)
+        XCTAssertEqual(snapshot.observations.single?.observedAt, statusDate)
+        let next = Task { await state.collect(using: bridge) }
+        let nextRequest = await requests.next()!
+        await state.resolve(requestID: nextRequest, generation: 0, availability: .available,
+                            devices: [device], waitForFreshRead: true)
+        await state.record(reading(identifier: device.identifier, level: 71), for: [nextRequest], generation: 0)
+        let nextSnapshot = await next.value
+        XCTAssertNil(nextSnapshot.observations.single?.chargingState)
+    }
+
+    func testExpiredStatusIsOmittedEvenWithFreshLevel() async {
+        let clock = TestDateClock(Date(timeIntervalSince1970: 1_000))
+        let state = CoreBluetoothCollectionState(timeoutNanoseconds: 60_000_000_000, now: { clock.current })
+        let bridge = TestBLECollectionBridge()
+        var requests = bridge.requestIDs.makeAsyncIterator()
+        let device = reading(identifier: UUID(), level: nil)
+        let collection = Task { await state.collect(using: bridge) }
+        let request = await requests.next()!
+        await state.resolve(requestID: request, generation: 0, availability: .available,
+                            devices: [device], waitForFreshRead: true)
+        await state.record(BLEDeviceReading(identifier: device.identifier, name: device.name,
+            isConnected: true, batteryLevel: 70, chargingState: .charging,
+            chargingObservedAt: Date(timeIntervalSince1970: 939)), for: [request], generation: 0)
+        let snapshot = await collection.value
+        XCTAssertEqual(snapshot.observations.single?.percentage, 70)
+        XCTAssertNil(snapshot.observations.single?.chargingState)
     }
 
     private func reading(identifier: UUID, level: Int?) -> BLEDeviceReading {

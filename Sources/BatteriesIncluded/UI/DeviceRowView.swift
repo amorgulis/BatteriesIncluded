@@ -11,12 +11,29 @@ extension DeviceBattery {
     }
 
     var menuRowText: String {
-        let batteryText = "\(name) — \(primaryBatteryText)"
-        switch chargingState {
-        case .charging: return "\(batteryText) · ⚡ Charging"
-        case .full: return "\(batteryText) · Fully charged"
-        case .discharging: return "\(batteryText) · Discharging"
-        case .unknown, nil: return batteryText
+        let components = Set(levels.map(\.component)).union(
+            componentChargingStates.filter { $0.value != .unknown }.keys
+        ).filter { $0 != .whole }.sorted()
+        if !components.isEmpty {
+            let summary = components.map { component in
+                let percentage = levels.first { $0.component == component }?.percentage
+                let levelText = percentage.map { "\($0)%" } ?? "Battery unavailable"
+                return "\(component.displayName) \(levelText)" +
+                    (componentChargingStates[component]?.menuSuffix ?? "")
+            }.joined(separator: " · ")
+            return "\(name) — \(summary)"
+        }
+        return "\(name) — \(primaryBatteryText)" + (chargingState?.menuSuffix ?? "")
+    }
+}
+
+private extension BatteryChargingState {
+    var menuSuffix: String {
+        switch self {
+        case .charging: " · ⚡ Charging"
+        case .full: " · Fully charged"
+        case .discharging: " · Discharging"
+        case .unknown: ""
         }
     }
 }

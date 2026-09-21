@@ -2,6 +2,73 @@ import XCTest
 @testable import BatteriesIncluded
 
 final class BatteryNormalizerTests: XCTestCase {
+    func testChargingStatesStayWithTheirHeadphoneComponents() {
+        var left = observation(component: .left, percentage: 50)
+        left.chargingState = .charging
+        var right = observation(component: .right, percentage: 100)
+        right.chargingState = .full
+        var caseBattery = observation(component: .case, percentage: 80)
+        caseBattery.chargingState = .discharging
+        let device = BatteryNormalizer().normalize([left, right, caseBattery],
+            now: Date(timeIntervalSince1970: 1_000))[0]
+
+        XCTAssertEqual(device.menuRowText,
+            "AirPods Pro — Left 50% · ⚡ Charging · Right 100% · Fully charged · Case 80% · Discharging")
+    }
+
+    func testComponentStatusExpiresAndDoesNotKeepDeviceInChargingState() {
+        var stale = observation(component: .left, percentage: nil, age: 61)
+        stale.chargingState = .charging
+        let fresh = observation(component: .left, percentage: 70)
+        let device = BatteryNormalizer().normalize([stale, fresh],
+            now: Date(timeIntervalSince1970: 1_000))[0]
+
+        XCTAssertEqual(device.menuRowText, "AirPods Pro — Left 70%")
+        XCTAssertTrue(device.componentChargingStates.isEmpty)
+    }
+
+    func testChangingOnlyComponentChargingStatusChangesDeviceEquality() {
+        var component = observation(component: .left, percentage: 70)
+        component.chargingState = .charging
+        let before = BatteryNormalizer().normalize([component], now: Date(timeIntervalSince1970: 1_000))[0]
+        component.chargingState = .discharging
+        let after = BatteryNormalizer().normalize([component], now: Date(timeIntervalSince1970: 1_000))[0]
+
+        XCTAssertNotEqual(before, after)
+    }
+
+    func testComponentChargingWithoutPercentageIsStillVisible() {
+        var left = observation(component: .left, percentage: nil)
+        left.chargingState = .charging
+        let device = BatteryNormalizer().normalize([left, observation(percentage: 80)],
+            now: Date(timeIntervalSince1970: 1_000))[0]
+
+        XCTAssertEqual(device.menuRowText, "AirPods Pro — Left Battery unavailable · ⚡ Charging")
+    }
+
+    func testUnknownFromDifferentSourceDoesNotHideKnownChargingState() {
+        var native = observation(percentage: 80, source: .system, age: 1)
+        native.chargingState = .charging
+        var ble = observation(percentage: 80, source: .coreBluetooth)
+        ble.chargingState = .unknown
+        let device = BatteryNormalizer().normalize([native, ble],
+            now: Date(timeIntervalSince1970: 1_000))[0]
+
+        XCTAssertEqual(device.menuRowText, "AirPods Pro — 80% · ⚡ Charging")
+    }
+
+    func testExplicitZeroComponentsWithChargingReportsAreNotPlaceholders() {
+        var components = [BatteryComponent.left, .right, .case].map {
+            observation(component: $0, percentage: 0)
+        }
+        for index in components.indices { components[index].chargingState = .charging }
+        let device = BatteryNormalizer().normalize(components + [observation(percentage: 80)],
+            now: Date(timeIntervalSince1970: 1_000))[0]
+
+        XCTAssertEqual(device.levels.map(\.component), [.left, .right, .case])
+        XCTAssertTrue(device.menuRowText.contains("Left 0% · ⚡ Charging"))
+    }
+
     private func observation(
         id: String = "device-1", stableID: String? = "stable-1",
         name: String = "AirPods Pro", connected: Bool = true,

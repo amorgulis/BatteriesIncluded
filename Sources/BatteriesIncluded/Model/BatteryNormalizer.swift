@@ -92,7 +92,8 @@ struct BatteryNormalizer: Sendable {
 
         let headphoneComponents: [BatteryComponent] = [.left, .right, .case]
         let hasExplicitComponents = newestFirst.contains {
-            $0.component != .whole && $0.source != .system && isValid($0, now: now)
+            $0.component != .whole && ($0.source != .system || $0.chargingState != nil) &&
+                isValid($0, now: now)
         }
         if category == .headphones,
            let wholePercentage = selected[.whole]?.percentage, wholePercentage > 0,
@@ -107,8 +108,11 @@ struct BatteryNormalizer: Sendable {
             }
         }
 
-        if selected.keys.contains(where: { $0 != .whole }) {
+        var componentStates = chargingStates(from: newestFirst, now: now)
+        let hasComponentStates = componentStates.contains { $0.key != .whole && $0.value != .unknown }
+        if selected.keys.contains(where: { $0 != .whole }) || hasComponentStates {
             selected.removeValue(forKey: .whole)
+            componentStates.removeValue(forKey: .whole)
         }
 
         let levels = selected.compactMap { component, observation in
@@ -116,14 +120,7 @@ struct BatteryNormalizer: Sendable {
         }
             .sorted { $0.component < $1.component }
         let coarseLevel = levels.isEmpty ? selected[.whole]?.coarseLevel : nil
-        // Status may be available even when another source supplies a better level.
-        // Keep the newest explicit report, including unknown, so old charging flags
-        // cannot survive a newer report that no longer confirms them.
-        let chargingState = selected.keys.contains(where: { $0 != .whole }) ? nil :
-            newestFirst.first(where: {
-                $0.component == .whole && $0.chargingState != nil &&
-                now.timeIntervalSince($0.observedAt) <= 60
-            })?.chargingState
+        let chargingState = componentStates.removeValue(forKey: .whole)
 
         return DeviceBattery(
             id: normalizedID(for: observations[0]),
@@ -131,8 +128,32 @@ struct BatteryNormalizer: Sendable {
             category: category,
             levels: levels,
             coarseLevel: coarseLevel,
-            chargingState: chargingState
+            chargingState: chargingState,
+            componentChargingStates: componentStates
         )
+    }
+
+    private func chargingStates(
+        from newestFirst: [BatteryObservation], now: Date
+    ) -> [BatteryComponent: BatteryChargingState] {
+        // A newer unknown clears that source's old status, but a source that
+        // cannot report charging must not hide another source's fresh signal.
+        var latest: [BatteryComponent: [BatterySource: BatteryObservation]] = [:]
+        for observation in newestFirst where observation.chargingState != nil &&
+            now.timeIntervalSince(observation.observedAt) <= 60 {
+            if latest[observation.component]?[observation.source] == nil {
+                latest[observation.component, default: [:]][observation.source] = observation
+            }
+        }
+        return latest.mapValues { bySource in
+            let known = bySource.values.filter { $0.chargingState != .unknown }
+            let candidates = known.isEmpty ? Array(bySource.values) : known
+            let preferred = candidates.sorted {
+                if $0.observedAt != $1.observedAt { return $0.observedAt > $1.observedAt }
+                return $0.source.rawValue > $1.source.rawValue
+            }.first!
+            return preferred.chargingState!
+        }
     }
 
     private func normalizedID(for observation: BatteryObservation) -> String {

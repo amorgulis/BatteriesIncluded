@@ -57,11 +57,13 @@ struct DeviceBattery: Identifiable, Sendable, Equatable {
     let levels: [(component: BatteryComponent, percentage: Int)]
     var coarseLevel: CoarseBatteryLevel? = nil
     var chargingState: BatteryChargingState? = nil
+    var componentChargingStates: [BatteryComponent: BatteryChargingState] = [:]
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.category == rhs.category &&
         lhs.levels.map { "\($0.component):\($0.percentage)" } == rhs.levels.map { "\($0.component):\($0.percentage)" } &&
-        lhs.coarseLevel == rhs.coarseLevel && lhs.chargingState == rhs.chargingState
+        lhs.coarseLevel == rhs.coarseLevel && lhs.chargingState == rhs.chargingState &&
+        lhs.componentChargingStates == rhs.componentChargingStates
     }
 
     static func componentSummary(_ levels: [(BatteryComponent, Int)]) -> String {
@@ -71,7 +73,7 @@ struct DeviceBattery: Identifiable, Sendable, Equatable {
     }
 }
 
-private extension BatteryComponent {
+extension BatteryComponent {
     var displayName: String {
         switch self {
         case .whole: "Battery"
