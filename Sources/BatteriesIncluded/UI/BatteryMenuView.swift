@@ -13,10 +13,6 @@ struct BatteryMenuView: View {
         }
         .disabled(monitor.isRefreshing)
 
-        Button("About Batteries Included") {
-            AppCommands.showAbout()
-        }
-
         Divider()
 
         Button("Quit") {
