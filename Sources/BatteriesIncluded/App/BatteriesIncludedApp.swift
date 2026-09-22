@@ -1,10 +1,21 @@
 import SwiftUI
 
 struct BatteriesIncludedApp: App {
-    @State private var monitor = DeviceMonitor(collectors: [
-        SystemBluetoothCollector(), CoreBluetoothCollector(), SystemProfilerCollector(),
-        LogitechHIDCollector()
-    ])
+    @State private var monitor = makeMonitor()
+
+    @MainActor
+    private static func makeMonitor() -> DeviceMonitor {
+        #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--device-snapshot") {
+            let path = CommandLine.arguments.dropFirst(index + 1).first ?? ""
+            return .snapshot(path: path)
+        }
+        #endif
+        return DeviceMonitor(collectors: [
+            SystemBluetoothCollector(), CoreBluetoothCollector(), SystemProfilerCollector(),
+            LogitechHIDCollector()
+        ])
+    }
 
     var body: some Scene {
         MenuBarExtra("Batteries Included", systemImage: "battery.75percent") {

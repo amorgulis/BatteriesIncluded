@@ -86,6 +86,9 @@ extension BatteryComponent {
 }
 
 enum MenuState: Sendable, Equatable {
+    #if DEBUG
+    case snapshotError(String)
+    #endif
     case loading
     case devices([DeviceBattery])
     case noDevices

@@ -25,6 +25,16 @@ final class DeviceMonitor {
         self.now = now
     }
 
+    #if DEBUG
+    private var snapshotPath: String?
+
+    static func snapshot(path: String) -> DeviceMonitor {
+        let monitor = DeviceMonitor(collectors: [])
+        monitor.snapshotPath = path
+        return monitor
+    }
+    #endif
+
     func start() {
         guard refreshTask == nil else { return }
         let refreshInterval = refreshInterval
@@ -53,6 +63,18 @@ final class DeviceMonitor {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
+
+        #if DEBUG
+        if let snapshotPath {
+            do {
+                let devices = try DeviceSnapshot.load(path: snapshotPath)
+                state = devices.isEmpty ? .noDevices : .devices(devices)
+            } catch {
+                state = .snapshotError("Could not load device snapshot: " + error.localizedDescription)
+            }
+            return
+        }
+        #endif
 
         let collectors = collectors
         let snapshots = await withTaskGroup(
@@ -113,6 +135,9 @@ private extension MenuState {
         case .bluetoothOff: "bluetooth-off"
         case .permissionDenied: "permission-denied"
         case .unavailable: "unavailable"
+        #if DEBUG
+        case .snapshotError: "snapshot-error"
+        #endif
         }
     }
 }

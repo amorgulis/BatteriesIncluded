@@ -13,7 +13,7 @@ final class BatteryNormalizerTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_000))[0]
 
         XCTAssertEqual(device.menuRowText,
-            "AirPods Pro — Left 50% · ⚡ Charging · Right 100% · Fully charged · Case 80% · Discharging")
+            "AirPods Pro — Left 50% ⚡ · Right 100% · Case 80%")
     }
 
     func testComponentStatusExpiresAndDoesNotKeepDeviceInChargingState() {
@@ -43,7 +43,7 @@ final class BatteryNormalizerTests: XCTestCase {
         let device = BatteryNormalizer().normalize([left, observation(percentage: 80)],
             now: Date(timeIntervalSince1970: 1_000))[0]
 
-        XCTAssertEqual(device.menuRowText, "AirPods Pro — Left Battery unavailable · ⚡ Charging")
+        XCTAssertEqual(device.menuRowText, "AirPods Pro — Left Battery unavailable ⚡")
     }
 
     func testUnknownFromDifferentSourceDoesNotHideKnownChargingState() {
@@ -54,7 +54,7 @@ final class BatteryNormalizerTests: XCTestCase {
         let device = BatteryNormalizer().normalize([native, ble],
             now: Date(timeIntervalSince1970: 1_000))[0]
 
-        XCTAssertEqual(device.menuRowText, "AirPods Pro — 80% · ⚡ Charging")
+        XCTAssertEqual(device.menuRowText, "AirPods Pro — 80% ⚡")
     }
 
     func testExplicitZeroComponentsWithChargingReportsAreNotPlaceholders() {
@@ -66,7 +66,7 @@ final class BatteryNormalizerTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_000))[0]
 
         XCTAssertEqual(device.levels.map(\.component), [.left, .right, .case])
-        XCTAssertTrue(device.menuRowText.contains("Left 0% · ⚡ Charging"))
+        XCTAssertTrue(device.menuRowText.contains("Left 0% ⚡"))
     }
 
     private func observation(
@@ -315,7 +315,7 @@ final class BatteryNormalizerTests: XCTestCase {
         )
 
         XCTAssertEqual(result[0].chargingState, .unknown)
-        XCTAssertFalse(result[0].menuRowText.contains("Charging"))
+        XCTAssertFalse(result[0].menuRowText.contains("⚡"))
     }
 
     func testDoesNotApplyWholeDeviceChargingStatusToIndividualComponents() {

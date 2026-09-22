@@ -7,6 +7,12 @@ expected_dist_directory="$repository_root/dist"
 expected_app_bundle="$expected_dist_directory/Batteries Included.app"
 swift_executable="${SWIFT_EXECUTABLE:-swift}"
 codesign_executable="${CODESIGN_EXECUTABLE:-/usr/bin/codesign}"
+build_configuration="${BUILD_CONFIGURATION:-release}"
+case "$build_configuration" in
+  debug|release) ;;
+  *) print -u2 -- "BUILD_CONFIGURATION must be debug or release."; exit 1 ;;
+esac
+
 signing_identity="${CODE_SIGN_IDENTITY:--}"
 
 if [[ -L "$dist_directory" ]]; then
@@ -28,11 +34,11 @@ if [[ "$app_bundle" != "$expected_app_bundle" || -L "$app_bundle" ]]; then
 fi
 
 cd "$repository_root"
-"$swift_executable" build -c release
+"$swift_executable" build -c "$build_configuration"
 
 rm -rf -- "$app_bundle"
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources"
-cp ".build/release/BatteriesIncluded" "$app_bundle/Contents/MacOS/BatteriesIncluded"
+cp ".build/$build_configuration/BatteriesIncluded" "$app_bundle/Contents/MacOS/BatteriesIncluded"
 cp "Resources/Info.plist" "$app_bundle/Contents/Info.plist"
 
 if [[ "$signing_identity" == "-" ]]; then

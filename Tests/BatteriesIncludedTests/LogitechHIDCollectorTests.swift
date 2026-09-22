@@ -56,29 +56,29 @@ final class LogitechHIDCollectorTests: XCTestCase {
 
     func testChargingReportsReachMenuWithoutInferringStatusFromPercentage() async {
         let cases: [(Int, [UInt8], String)] = [
-            (0, [76, 4, 1], "76% · ⚡ Charging"),
-            (0, [99, 8, 2], "99% · ⚡ Charging"),
-            (0, [100, 8, 3], "100% · Fully charged"),
-            (0, [15, 2, 4], "15% · ⚡ Charging"),
-            (0, [100, 8, 0], "100% · Discharging"),
+            (0, [76, 4, 1], "76% ⚡"),
+            (0, [99, 8, 2], "99% ⚡"),
+            (0, [100, 8, 3], "100%"),
+            (0, [15, 2, 4], "15% ⚡"),
+            (0, [100, 8, 0], "100%"),
             (0, [76, 4, 5], "76%"),
             (0, [76, 4, 6], "76%"),
             (0, [76, 4, 255], "76%"),
             (0, [76, 4], "76%"),
-            (0, [0, 2, 1], "Low · ⚡ Charging"),
-            (0, [0, 0, 1], "Battery unavailable · ⚡ Charging"),
-            (1, [73, 60, 1], "73% · ⚡ Charging"),
-            (1, [0, 0, 1], "Battery unavailable · ⚡ Charging"),
-            (2, [0x0E, 0x57, 0x80], "10% · ⚡ Charging"),
-            (2, [0x0E, 0x57, 0x81], "10% · Fully charged"),
-            (2, [0x0E, 0x57, 0], "10% · Discharging"),
-            (3, [64, 0, 0x50], "64% · ⚡ Charging"),
-            (3, [100, 0, 0x90], "100% · Fully charged"),
-            (3, [64, 0, 0x30], "64% · Discharging"),
-            (4, [5, 0x21, 0], "Good · ⚡ Charging"),
-            (4, [7, 0x22, 0], "Full · Fully charged"),
-            (4, [3, 0, 0], "Low · Discharging"),
-            (4, [0, 0x21, 0], "Battery unavailable · ⚡ Charging")
+            (0, [0, 2, 1], "Low ⚡"),
+            (0, [0, 0, 1], "Battery unavailable ⚡"),
+            (1, [73, 60, 1], "73% ⚡"),
+            (1, [0, 0, 1], "Battery unavailable ⚡"),
+            (2, [0x0E, 0x57, 0x80], "10% ⚡"),
+            (2, [0x0E, 0x57, 0x81], "10%"),
+            (2, [0x0E, 0x57, 0], "10%"),
+            (3, [64, 0, 0x50], "64% ⚡"),
+            (3, [100, 0, 0x90], "100%"),
+            (3, [64, 0, 0x30], "64%"),
+            (4, [5, 0x21, 0], "Good ⚡"),
+            (4, [7, 0x22, 0], "Full"),
+            (4, [3, 0, 0], "Low"),
+            (4, [0, 0x21, 0], "Battery unavailable ⚡")
         ]
         let capturedAt = Date(timeIntervalSince1970: 1_000)
         for (feature, payload, expected) in cases {
