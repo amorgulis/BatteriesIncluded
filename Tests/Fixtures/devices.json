@@ -1,0 +1,9 @@
+[
+  {"id":"charging","name":"Charging Mouse","category":"mouse","levels":[{"component":"whole","percentage":42}],"chargingState":"charging"},
+  {"id":"discharging","name":"Keyboard","category":"keyboard","levels":[{"component":"whole","percentage":73}],"chargingState":"discharging"},
+  {"id":"full","name":"Trackpad","category":"trackpad","levels":[{"component":"whole","percentage":100}],"chargingState":"full"},
+  {"id":"unknown","name":"Controller","category":"gameController","levels":[{"component":"whole","percentage":50}],"chargingState":"unknown"},
+  {"id":"coarse","name":"Coarse Battery Mouse","category":"mouse","coarseLevel":"Low","chargingState":"charging"},
+  {"id":"missing","name":"Speaker","category":"other","chargingState":"charging"},
+  {"id":"earbuds","name":"Earbuds","category":"headphones","levels":[{"component":"left","percentage":42},{"component":"right","percentage":100},{"component":"case","percentage":65}],"componentChargingStates":{"left":"charging","right":"full","case":"discharging"}}
+]

@@ -52,8 +52,8 @@ percentages or coarse levels such as `Good` and `Low`. Bluetooth devices without
 a readable value remain visible as `Battery unavailable`.
 
 Supported Logitech reports also expose charging state. The menu shows
-`⚡ Charging`, `Fully charged`, or `Discharging` when the device explicitly
-reports that state. Unknown or unsupported charging state adds no indicator;
+`⚡` only while the device explicitly reports charging. Fully charged and
+discharging states add no text. Unknown or unsupported charging state adds no indicator;
 a 100% battery level alone does not imply that charging has completed.
 Charging status refreshes with battery levels (every 30 seconds or via Refresh).
 
@@ -76,3 +76,39 @@ Protocol references: [Bluetooth Battery Service 1.1](https://www.bluetooth.com/w
 [GATT characteristic formats](https://btprodspecificationrefs.blob.core.windows.net/gatt-specification-supplement/GATT_Specification_Supplement.pdf),
 and Apple's [accessory power API](https://github.com/apple-oss-distributions/IOKitUser/blob/main/ps.subproj/IOPowerSourcesPrivate.h)
 and [accessory keys](https://github.com/apple-oss-distributions/IOKitUser/blob/main/ps.subproj/IOPSKeysPrivate.h).
+
+## Try UI states without hardware
+
+Build a development bundle and launch it with an external snapshot:
+
+```bash
+BUILD_CONFIGURATION=debug scripts/build-app.sh
+open 'dist/Batteries Included.app' --args --device-snapshot "$PWD/Tests/Fixtures/devices.json"
+```
+
+Quit any running copy first so macOS starts the app with these arguments.
+Edit the JSON file, then choose **Refresh** in the menu to reload it.
+Snapshot mode also reloads every 30 seconds and never starts hardware collectors.
+Unreadable or invalid files show an error in the menu; fix the file and Refresh
+to recover. An empty array shows the normal no-devices message.
+
+The example lives under `Tests/Fixtures/`; it is not bundled with the app.
+You can copy it anywhere and pass that absolute path instead.
+
+The file is an array of devices. Each device requires unique `id`, `name`,
+and `category` (`mouse`, `keyboard`, `trackpad`, `headphones`,
+`gameController`, or `other`). Optional fields:
+
+- `levels`: an array of `{"component":"whole","percentage":42}` objects.
+  Percentages must be integers from 0 to 100. Components are `whole`, `left`,
+  `right`, `case`, or a custom label; each must be unique within a device.
+- `chargingState`: `charging`, `discharging`, `full`, or `unknown`.
+- `componentChargingStates`: a mapping such as `{"left":"charging","case":"full"}`.
+- `coarseLevel`: `Full`, `Good`, `Low`, or `Critical`.
+
+Omit levels to try battery-unavailable states. For earbuds, use component
+charging states; whole-device status is not applied to individual components.
+
+Launching without `--device-snapshot` uses real devices. The argument handling,
+file loader, and snapshot error UI compile only in DEBUG builds. The default
+`scripts/build-app.sh` still builds a release bundle, which excludes them.

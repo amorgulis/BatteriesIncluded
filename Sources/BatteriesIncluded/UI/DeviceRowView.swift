@@ -30,9 +30,9 @@ extension DeviceBattery {
 private extension BatteryChargingState {
     var menuSuffix: String {
         switch self {
-        case .charging: " · ⚡ Charging"
-        case .full: " · Fully charged"
-        case .discharging: " · Discharging"
+        case .charging: " ⚡"
+        case .full: ""
+        case .discharging: ""
         case .unknown: ""
         }
     }

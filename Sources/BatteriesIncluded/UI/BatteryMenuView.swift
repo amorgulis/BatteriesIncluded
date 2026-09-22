@@ -27,6 +27,10 @@ struct BatteryMenuView: View {
     @ViewBuilder
     private var menuContent: some View {
         switch monitor.state {
+        #if DEBUG
+        case .snapshotError(let message):
+            Text(message)
+        #endif
         case .loading:
             ProgressView("Reading batteries…")
         case .devices(let devices):
