@@ -67,10 +67,16 @@ struct DeviceRowView: View {
     }
 
     var body: some View {
-        Label {
-            title
-        } icon: {
-            Image(systemName: DeviceIcon.symbol(for: device.category))
+        // A plain Label becomes a disabled NSMenuItem, dimming its text.
+        // An enabled row preserves native foreground and selection colors.
+        Button {
+            // Selecting a read-only device row only dismisses the menu.
+        } label: {
+            Label {
+                title
+            } icon: {
+                Image(systemName: DeviceIcon.symbol(for: device.category))
+            }
         }
         .accessibilityLabel(device.menuAccessibilityText)
     }
