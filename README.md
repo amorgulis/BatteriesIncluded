@@ -51,6 +51,15 @@ a battery value. Logitech HID++ 1.0 and 2.0 devices can report either exact
 percentages or coarse levels such as `Good` and `Low`. Bluetooth devices without
 a readable value remain visible as `Battery unavailable`.
 
+The menu bar battery fills to the lowest known percentage among connected
+devices, including individual earbuds and cases. Hover to see which battery
+sets the level. A bolt appears only when every device and reported battery
+component is explicitly charging; discharging, full, or unknown states hide it. If no numeric
+readings are available, the icon shows a question mark; coarse readings such
+as `Low` are retained in the tooltip without inventing a percentage. When only
+some readings are missing, the icon uses the lowest known value and the tooltip
+notes the incomplete information. Monitoring starts when the app launches.
+
 Supported Logitech reports also expose charging state. The menu shows
 a battery icon beside each percentage, filled proportionally to that value.
 While charging, a lightning bolt appears inside the battery icon. Charging

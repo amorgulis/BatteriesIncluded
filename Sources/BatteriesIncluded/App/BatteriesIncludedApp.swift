@@ -18,10 +18,17 @@ struct BatteriesIncludedApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("Batteries Included", systemImage: "battery.75percent") {
+        MenuBarExtra {
             BatteryMenuView(monitor: monitor)
-                .task { monitor.start() }
                 .onAppear { Task { await monitor.refresh() } }
+        } label: {
+            let battery = MenuBarBattery(state: monitor.state)
+            Image(nsImage: BatteryLevelIcon.image(
+                percentage: battery.percentage, isCharging: battery.isCharging, showsUnknown: true
+            ))
+            .help(battery.tooltip)
+            .accessibilityLabel("Batteries Included. " + battery.tooltip)
+            .task { monitor.start() }
         }
         .menuBarExtraStyle(.menu)
     }
