@@ -66,6 +66,29 @@ final class MenuPresentationTests: XCTestCase {
         XCTAssertEqual(device.primaryBatteryText, "Left 82% · Right 76%")
     }
 
+    func testIconsFollowEachComponentLevelAndChargingState() {
+        let device = DeviceBattery(
+            id: "x", name: "Earbuds", category: .headphones,
+            levels: [(.left, 42), (.right, 100)],
+            chargingState: .charging,
+            componentChargingStates: [.left: .charging, .right: .full, .case: .charging]
+        )
+        XCTAssertEqual(device.menuBatteryParts.map(\.percentage), [42, 100, nil])
+        XCTAssertEqual(device.menuBatteryParts.map(\.isCharging), [true, false, true])
+        XCTAssertEqual(device.menuBatteryParts.map(\.showsIcon), [true, true, true])
+    }
+
+    func testCoarseAndUnavailableLevelsOnlyShowIconWhenCharging() {
+        var device = DeviceBattery(id: "x", name: "Mouse", category: .mouse,
+                                   levels: [], coarseLevel: .good)
+        XCTAssertFalse(device.menuBatteryParts[0].showsIcon)
+        device.chargingState = .charging
+        XCTAssertTrue(device.menuBatteryParts[0].showsIcon)
+        XCTAssertNil(device.menuBatteryParts[0].percentage)
+        XCTAssertEqual(device.menuRowText, "Mouse — Good")
+        XCTAssertEqual(device.menuAccessibilityText, "Mouse — Good, charging")
+    }
+
     func testDeviceSymbols() {
         XCTAssertEqual(DeviceIcon.symbol(for: .headphones), "headphones")
         XCTAssertEqual(DeviceIcon.symbol(for: .mouse), "computermouse")
