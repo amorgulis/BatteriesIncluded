@@ -13,7 +13,8 @@ final class BatteryNormalizerTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_000))[0]
 
         XCTAssertEqual(device.menuRowText,
-            "AirPods Pro — Left 50% ⚡ · Right 100% · Case 80%")
+            "AirPods Pro — Left 50% · Right 100% · Case 80%")
+        XCTAssertEqual(device.menuBatteryParts.map(\.isCharging), [true, false, false])
     }
 
     func testComponentStatusExpiresAndDoesNotKeepDeviceInChargingState() {
@@ -43,7 +44,8 @@ final class BatteryNormalizerTests: XCTestCase {
         let device = BatteryNormalizer().normalize([left, observation(percentage: 80)],
             now: Date(timeIntervalSince1970: 1_000))[0]
 
-        XCTAssertEqual(device.menuRowText, "AirPods Pro — Left Battery unavailable ⚡")
+        XCTAssertEqual(device.menuRowText, "AirPods Pro — Left Battery unavailable")
+        XCTAssertTrue(device.menuBatteryParts[0].isCharging)
     }
 
     func testUnknownFromDifferentSourceDoesNotHideKnownChargingState() {
@@ -54,7 +56,8 @@ final class BatteryNormalizerTests: XCTestCase {
         let device = BatteryNormalizer().normalize([native, ble],
             now: Date(timeIntervalSince1970: 1_000))[0]
 
-        XCTAssertEqual(device.menuRowText, "AirPods Pro — 80% ⚡")
+        XCTAssertEqual(device.menuRowText, "AirPods Pro — 80%")
+        XCTAssertTrue(device.menuBatteryParts[0].isCharging)
     }
 
     func testExplicitZeroComponentsWithChargingReportsAreNotPlaceholders() {
@@ -66,7 +69,8 @@ final class BatteryNormalizerTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_000))[0]
 
         XCTAssertEqual(device.levels.map(\.component), [.left, .right, .case])
-        XCTAssertTrue(device.menuRowText.contains("Left 0% ⚡"))
+        XCTAssertTrue(device.menuRowText.contains("Left 0%"))
+        XCTAssertTrue(device.menuBatteryParts.allSatisfy(\.isCharging))
     }
 
     private func observation(
@@ -315,7 +319,7 @@ final class BatteryNormalizerTests: XCTestCase {
         )
 
         XCTAssertEqual(result[0].chargingState, .unknown)
-        XCTAssertFalse(result[0].menuRowText.contains("⚡"))
+        XCTAssertFalse(result[0].menuBatteryParts[0].isCharging)
     }
 
     func testDoesNotApplyWholeDeviceChargingStatusToIndividualComponents() {

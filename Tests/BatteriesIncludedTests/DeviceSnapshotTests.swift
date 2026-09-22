@@ -16,7 +16,8 @@ final class DeviceSnapshotTests: XCTestCase {
         """.utf8).write(to: url)
         await monitor.refresh()
         guard case .devices(let devices) = monitor.state else { return XCTFail("Expected devices") }
-        XCTAssertEqual(devices.first?.menuRowText, "Mouse — 42% ⚡")
+        XCTAssertEqual(devices.first?.menuRowText, "Mouse — 42%")
+        XCTAssertEqual(devices.first?.menuBatteryParts.first?.isCharging, true)
 
         try Data("[]".utf8).write(to: url)
         await monitor.refresh()
@@ -50,7 +51,7 @@ final class DeviceSnapshotTests: XCTestCase {
         await monitor.refresh()
         guard case .devices(let devices) = monitor.state else { return XCTFail("Expected fixture devices") }
         XCTAssertEqual(devices.last?.menuRowText,
-                       "Earbuds — Left 42% ⚡ · Right 100% · Case 65%")
+                       "Earbuds — Left 42% · Right 100% · Case 65%")
     }
 }
 #endif

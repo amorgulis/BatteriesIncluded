@@ -52,8 +52,10 @@ percentages or coarse levels such as `Good` and `Low`. Bluetooth devices without
 a readable value remain visible as `Battery unavailable`.
 
 Supported Logitech reports also expose charging state. The menu shows
-`⚡` only while the device explicitly reports charging. Fully charged and
-discharging states add no text. Unknown or unsupported charging state adds no indicator;
+a battery icon beside each percentage, filled proportionally to that value.
+While charging, a lightning bolt appears inside the battery icon. Charging
+without a numeric level shows an outlined battery with a bolt. Fully charged
+and discharging states add no text. Unknown charging state adds no bolt;
 a 100% battery level alone does not imply that charging has completed.
 Charging status refreshes with battery levels (every 30 seconds or via Refresh).
 

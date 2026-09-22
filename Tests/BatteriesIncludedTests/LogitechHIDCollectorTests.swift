@@ -55,33 +55,33 @@ final class LogitechHIDCollectorTests: XCTestCase {
     }
 
     func testChargingReportsReachMenuWithoutInferringStatusFromPercentage() async {
-        let cases: [(Int, [UInt8], String)] = [
-            (0, [76, 4, 1], "76% ⚡"),
-            (0, [99, 8, 2], "99% ⚡"),
-            (0, [100, 8, 3], "100%"),
-            (0, [15, 2, 4], "15% ⚡"),
-            (0, [100, 8, 0], "100%"),
-            (0, [76, 4, 5], "76%"),
-            (0, [76, 4, 6], "76%"),
-            (0, [76, 4, 255], "76%"),
-            (0, [76, 4], "76%"),
-            (0, [0, 2, 1], "Low ⚡"),
-            (0, [0, 0, 1], "Battery unavailable ⚡"),
-            (1, [73, 60, 1], "73% ⚡"),
-            (1, [0, 0, 1], "Battery unavailable ⚡"),
-            (2, [0x0E, 0x57, 0x80], "10% ⚡"),
-            (2, [0x0E, 0x57, 0x81], "10%"),
-            (2, [0x0E, 0x57, 0], "10%"),
-            (3, [64, 0, 0x50], "64% ⚡"),
-            (3, [100, 0, 0x90], "100%"),
-            (3, [64, 0, 0x30], "64%"),
-            (4, [5, 0x21, 0], "Good ⚡"),
-            (4, [7, 0x22, 0], "Full"),
-            (4, [3, 0, 0], "Low"),
-            (4, [0, 0x21, 0], "Battery unavailable ⚡")
+        let cases: [(Int, [UInt8], String, Bool)] = [
+            (0, [76, 4, 1], "76%", true),
+            (0, [99, 8, 2], "99%", true),
+            (0, [100, 8, 3], "100%", false),
+            (0, [15, 2, 4], "15%", true),
+            (0, [100, 8, 0], "100%", false),
+            (0, [76, 4, 5], "76%", false),
+            (0, [76, 4, 6], "76%", false),
+            (0, [76, 4, 255], "76%", false),
+            (0, [76, 4], "76%", false),
+            (0, [0, 2, 1], "Low", true),
+            (0, [0, 0, 1], "Battery unavailable", true),
+            (1, [73, 60, 1], "73%", true),
+            (1, [0, 0, 1], "Battery unavailable", true),
+            (2, [0x0E, 0x57, 0x80], "10%", true),
+            (2, [0x0E, 0x57, 0x81], "10%", false),
+            (2, [0x0E, 0x57, 0], "10%", false),
+            (3, [64, 0, 0x50], "64%", true),
+            (3, [100, 0, 0x90], "100%", false),
+            (3, [64, 0, 0x30], "64%", false),
+            (4, [5, 0x21, 0], "Good", true),
+            (4, [7, 0x22, 0], "Full", false),
+            (4, [3, 0, 0], "Low", false),
+            (4, [0, 0x21, 0], "Battery unavailable", true)
         ]
         let capturedAt = Date(timeIntervalSince1970: 1_000)
-        for (feature, payload, expected) in cases {
+        for (feature, payload, expected, isCharging) in cases {
             var replies: [[UInt8]?] = Array(repeating: nil, count: feature)
             if feature < 3 { replies.append([0x10, 0xFF, 0, 8, 5, 0, 0]) }
             replies.append([0x10, 0xFF, 5, 9] + payload)
@@ -95,9 +95,11 @@ final class LogitechHIDCollectorTests: XCTestCase {
             let snapshot = await collector.collect()
             let devices = BatteryNormalizer().normalize(snapshot.observations, now: capturedAt)
             XCTAssertEqual(devices.first?.menuRowText, "MX — " + expected, "feature \(feature), \(payload)")
+            XCTAssertEqual(devices.first?.menuBatteryParts.first?.isCharging, isCharging)
             let stale = BatteryNormalizer().normalize(snapshot.observations, now: capturedAt.addingTimeInterval(61))
             if let device = stale.first {
                 XCTAssertEqual(device.menuRowText, "MX — Battery unavailable")
+                XCTAssertFalse(device.menuBatteryParts[0].isCharging)
             }
         }
     }

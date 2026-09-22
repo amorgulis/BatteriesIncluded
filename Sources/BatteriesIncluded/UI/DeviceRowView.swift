@@ -1,5 +1,14 @@
 import SwiftUI
 
+struct MenuBatteryPart {
+    let text: String
+    let percentage: Int?
+    let isCharging: Bool
+
+    var showsIcon: Bool { percentage != nil || isCharging }
+    var accessibilityText: String { text + (isCharging ? ", charging" : "") }
+}
+
 extension DeviceBattery {
     var primaryBatteryText: String {
         if let coarseLevel { return coarseLevel.rawValue }
@@ -10,38 +19,59 @@ extension DeviceBattery {
         return Self.componentSummary(levels)
     }
 
-    var menuRowText: String {
+    var menuBatteryParts: [MenuBatteryPart] {
         let components = Set(levels.map(\.component)).union(
             componentChargingStates.filter { $0.value != .unknown }.keys
         ).filter { $0 != .whole }.sorted()
         if !components.isEmpty {
-            let summary = components.map { component in
+            return components.map { component in
                 let percentage = levels.first { $0.component == component }?.percentage
                 let levelText = percentage.map { "\($0)%" } ?? "Battery unavailable"
-                return "\(component.displayName) \(levelText)" +
-                    (componentChargingStates[component]?.menuSuffix ?? "")
-            }.joined(separator: " · ")
-            return "\(name) — \(summary)"
+                return MenuBatteryPart(
+                    text: "\(component.displayName) \(levelText)",
+                    percentage: percentage,
+                    isCharging: componentChargingStates[component] == .charging
+                )
+            }
         }
-        return "\(name) — \(primaryBatteryText)" + (chargingState?.menuSuffix ?? "")
+        return [MenuBatteryPart(
+            text: primaryBatteryText,
+            percentage: coarseLevel == nil ? levels.first?.percentage : nil,
+            isCharging: chargingState == .charging
+        )]
     }
-}
 
-private extension BatteryChargingState {
-    var menuSuffix: String {
-        switch self {
-        case .charging: " ⚡"
-        case .full: ""
-        case .discharging: ""
-        case .unknown: ""
-        }
+    var menuRowText: String {
+        "\(name) — " + menuBatteryParts.map(\.text).joined(separator: " · ")
+    }
+
+    var menuAccessibilityText: String {
+        "\(name) — " + menuBatteryParts.map(\.accessibilityText).joined(separator: ", ")
     }
 }
 
 struct DeviceRowView: View {
     let device: DeviceBattery
 
+    private var title: Text {
+        var text = Text(verbatim: "\(device.name) — ")
+        for (index, part) in device.menuBatteryParts.enumerated() {
+            if index > 0 { text = text + Text(verbatim: " · ") }
+            text = text + Text(verbatim: part.text)
+            if part.showsIcon {
+                let image = BatteryLevelIcon.image(percentage: part.percentage, isCharging: part.isCharging)
+                text = text + Text(" ") + Text(Image(nsImage: image)).baselineOffset(-2)
+            }
+        }
+        return text
+    }
+
     var body: some View {
-        Label(device.menuRowText, systemImage: DeviceIcon.symbol(for: device.category))
+        Label {
+            title
+        } icon: {
+            Image(systemName: DeviceIcon.symbol(for: device.category))
+        }
+        .accessibilityLabel(device.menuAccessibilityText)
     }
 }
