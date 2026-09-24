@@ -2,10 +2,15 @@ import SwiftUI
 
 struct BatteriesIncludedApp: App {
     @State private var monitor = makeMonitor()
+    @State private var debugMenuVisibility = DebugMenuVisibility()
 
     @MainActor
     private static func makeMonitor() -> DeviceMonitor {
         #if DEBUG
+        if let index = CommandLine.arguments.firstIndex(of: "--collector-snapshot") {
+            let path = CommandLine.arguments.dropFirst(index + 1).first ?? ""
+            return .collectorSnapshot(path: path)
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--device-snapshot") {
             let path = CommandLine.arguments.dropFirst(index + 1).first ?? ""
             return .snapshot(path: path)

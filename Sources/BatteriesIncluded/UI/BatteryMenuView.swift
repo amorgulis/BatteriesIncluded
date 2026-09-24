@@ -13,6 +13,13 @@ struct BatteryMenuView: View {
         }
         .disabled(monitor.isRefreshing)
 
+        Button(DebugMenuVisibility.exportTitle) {
+            if let capture = monitor.collectorCapture {
+                AppCommands.exportDebugSnapshot(capture)
+            }
+        }
+        .disabled(monitor.collectorCapture == nil)
+
         Divider()
 
         Button("Quit") {
