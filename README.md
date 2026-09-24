@@ -123,3 +123,28 @@ charging states; whole-device status is not applied to individual components.
 Launching without `--device-snapshot` uses real devices. The argument handling,
 file loader, and snapshot error UI compile only in DEBUG builds. The default
 `scripts/build-app.sh` still builds a release bundle, which excludes them.
+
+### Exporting collector data for debugging
+
+Hold **Option** while clicking the menu bar icon, then choose
+**Export Debug Snapshot…** and save the JSON file. A normal click hides this item.
+This is available in release builds. It exports the last completed refresh,
+including every collector's name, availability and observations before
+normalization, plus the capture time and app/macOS versions. Empty collectors
+are included. Optional observation fields that were not reported are omitted;
+zero percentages remain explicit. Dates are Unix timestamps in seconds.
+The capture retains device names and identifiers used to match sources.
+It contains collector outputs, not raw Bluetooth packets or OS responses.
+
+Copy the file to your development machine and replay it with:
+
+```sh
+swift run BatteriesIncluded --collector-snapshot /path/to/capture.json
+```
+
+Replay is available in debug builds only. It uses the original capture time
+for freshness checks and does not query local collectors. Refresh reloads the
+file, so you can edit it to investigate source disagreements. Unsupported or
+malformed captures show an error in the menu. The existing `--device-snapshot`
+option still accepts the simpler UI fixture format; `--collector-snapshot`
+takes precedence if both are supplied.
