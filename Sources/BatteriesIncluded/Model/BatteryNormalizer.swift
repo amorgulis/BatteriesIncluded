@@ -108,6 +108,19 @@ struct BatteryNormalizer: Sendable {
             }
         }
 
+        if category == .headphones, let caseReading = selected[.case], caseReading.percentage == 0 {
+            let validReadings = newestFirst.filter { isValid($0, now: now) }
+            let caseSources = Set(validReadings.filter { $0.component == .case }.map(\.source))
+            let hasOtherEarbudSource = validReadings.contains {
+                ($0.component == .left || $0.component == .right) && $0.source != caseReading.source
+            }
+            if caseSources.count == 1 && hasOtherEarbudSource {
+                // A lone zero may mean the case is unavailable when another source
+                // reports the earbuds without a case level.
+                selected.removeValue(forKey: .case)
+            }
+        }
+
         var componentStates = chargingStates(from: newestFirst, now: now)
         let hasComponentStates = componentStates.contains { $0.key != .whole && $0.value != .unknown }
         if selected.keys.contains(where: { $0 != .whole }) || hasComponentStates {

@@ -170,6 +170,53 @@ final class BatteryNormalizerTests: XCTestCase {
         XCTAssertEqual(result[0].levels.map(\.percentage), [80, 80, 0])
     }
 
+    func testHidesLoneZeroCaseWhenAnotherSourceReportsOnlyEarbuds() {
+        for (caseSource, earbudSource): (BatterySource, BatterySource) in [
+            (.system, .systemProfiler), (.systemProfiler, .system), (.system, .coreBluetooth)
+        ] {
+            for includesMissingCase in [false, true] {
+                var readings = [
+                    observation(component: .case, percentage: 0, source: caseSource),
+                    observation(component: .left, percentage: 80, source: earbudSource),
+                    observation(component: .right, percentage: 70, source: earbudSource)
+                ]
+                if includesMissingCase {
+                    readings.append(observation(component: .case, percentage: nil, source: earbudSource))
+                }
+                for input in [readings, Array(readings.reversed())] {
+                    let device = BatteryNormalizer().normalize(input, now: Date(timeIntervalSince1970: 1_000))[0]
+                    XCTAssertEqual(device.levels.map(\.component), [.left, .right])
+                    XCTAssertEqual(device.levels.map(\.percentage), [80, 70])
+                }
+            }
+        }
+    }
+
+    func testPreservesCaseWhenZeroIsCorroboratedOrPercentageIsPositive() {
+        for percentage in [0, 40] {
+            var readings = [
+                observation(component: .case, percentage: percentage),
+                observation(component: .left, percentage: 80, source: .systemProfiler),
+                observation(component: .right, percentage: 70, source: .systemProfiler)
+            ]
+            if percentage == 0 {
+                readings.append(observation(component: .case, percentage: 0, source: .coreBluetooth))
+            }
+            let device = BatteryNormalizer().normalize(readings, now: Date(timeIntervalSince1970: 1_000))[0]
+            XCTAssertEqual(device.levels.first { $0.component == .case }?.percentage, percentage)
+        }
+    }
+
+    func testStaleOrInvalidEarbudReadingsDoNotSuppressZeroCase() {
+        for (percentage, age): (Int?, TimeInterval) in [(80, 61), (nil, 0), (-1, 0)] {
+            let device = BatteryNormalizer().normalize([
+                observation(component: .case, percentage: 0),
+                observation(component: .left, percentage: percentage, source: .systemProfiler, age: age)
+            ], now: Date(timeIntervalSince1970: 1_000))[0]
+            XCTAssertEqual(device.levels.first { $0.component == .case }?.percentage, 0)
+        }
+    }
+
     func testZeroComponentsRemainWithoutFreshPositiveWhole() {
         for (percentage, age): (Int?, TimeInterval) in [(nil, 0), (0, 0), (80, 61)] {
             let result = BatteryNormalizer().normalize([
