@@ -1,10 +1,13 @@
 import SwiftUI
+import ServiceManagement
 
 struct BatteryMenuView: View {
     let monitor: DeviceMonitor
+    @State private var launchAtLogin = LaunchAtLogin()
 
     var body: some View {
         menuContent
+            .onAppear { launchAtLogin.refresh() }
 
         Divider()
 
@@ -21,6 +24,29 @@ struct BatteryMenuView: View {
         .disabled(monitor.collectorCapture == nil)
 
         Divider()
+
+        Toggle("Launch at Login", isOn: Binding(
+            get: { launchAtLogin.isEnabled },
+            set: { enabled in
+                do {
+                    try launchAtLogin.setEnabled(enabled)
+                    if launchAtLogin.requiresApproval {
+                        SMAppService.openSystemSettingsLoginItems()
+                    }
+                } catch {
+                    let alert = NSAlert(error: error)
+                    alert.messageText = "Could not change Launch at Login"
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                }
+            }
+        ))
+
+        if launchAtLogin.requiresApproval {
+            Button("Approve Launch at Login…") {
+                SMAppService.openSystemSettingsLoginItems()
+            }
+        }
 
         Button("Quit") {
             AppCommands.quit()
@@ -39,7 +65,7 @@ struct BatteryMenuView: View {
         case .devices(let devices):
             ForEach(devices) { device in
                 DeviceRowView(device: device, contentWidth: DeviceRowView.contentWidth(
-                    for: devices, otherTitles: ["Refresh", DebugMenuVisibility.exportTitle, "Quit"]
+                    for: devices, otherTitles: ["Refresh", DebugMenuVisibility.exportTitle, "Launch at Login", "Approve Launch at Login…", "Quit"]
                 ))
             }
         case .noDevices:

@@ -88,6 +88,11 @@ Protocol references: [Bluetooth Battery Service 1.1](https://www.bluetooth.com/w
 and Apple's [accessory power API](https://github.com/apple-oss-distributions/IOKitUser/blob/main/ps.subproj/IOPowerSourcesPrivate.h)
 and [accessory keys](https://github.com/apple-oss-distributions/IOKitUser/blob/main/ps.subproj/IOPSKeysPrivate.h).
 
+Choose **Launch at Login** in the menu to start the app automatically when you
+sign in. The checkmark reflects the macOS login-item setting. If approval is
+required, choose **Approve Launch at Login…** to open System Settings. Use the
+built app bundle for this feature rather than `swift run`.
+
 ## Try UI states without hardware
 
 Build a development bundle and launch it with an external snapshot:
