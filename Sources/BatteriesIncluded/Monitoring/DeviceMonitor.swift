@@ -6,6 +6,7 @@ import Observation
 final class DeviceMonitor {
     private(set) var state: MenuState = .loading
     private(set) var isRefreshing = false
+    private(set) var collectorCapture: CollectorCapture?
 
     private let collectors: [any BatteryCollecting]
     private let normalizer: BatteryNormalizer
@@ -27,6 +28,13 @@ final class DeviceMonitor {
 
     #if DEBUG
     private var snapshotPath: String?
+    private var collectorSnapshotPath: String?
+
+    static func collectorSnapshot(path: String) -> DeviceMonitor {
+        let monitor = DeviceMonitor(collectors: [])
+        monitor.collectorSnapshotPath = path
+        return monitor
+    }
 
     static func snapshot(path: String) -> DeviceMonitor {
         let monitor = DeviceMonitor(collectors: [])
@@ -65,6 +73,17 @@ final class DeviceMonitor {
         defer { isRefreshing = false }
 
         #if DEBUG
+        if let collectorSnapshotPath {
+            do {
+                let capture = try CollectorCapture.load(path: collectorSnapshotPath)
+                collectorCapture = capture
+                publish(capture.collectors.map(\.snapshot), at: capture.capturedAt)
+            } catch {
+                collectorCapture = nil
+                state = .snapshotError("Could not load collector snapshot: " + error.localizedDescription)
+            }
+            return
+        }
         if let snapshotPath {
             do {
                 let devices = try DeviceSnapshot.load(path: snapshotPath)
@@ -96,9 +115,18 @@ final class DeviceMonitor {
 
         guard !Task.isCancelled else { return }
 
+        let capturedAt = now()
+        collectorCapture = CollectorCapture(capturedAt: capturedAt, collectors:
+            zip(collectors, snapshots).map { collector, snapshot in
+                .init(name: String(describing: type(of: collector)), snapshot: snapshot)
+            })
+        publish(snapshots, at: capturedAt)
+    }
+
+    private func publish(_ snapshots: [CollectorSnapshot], at capturedAt: Date) {
         let devices = normalizer.normalize(
             snapshots.flatMap(\.observations),
-            now: now()
+            now: capturedAt
         )
         let nextState: MenuState
         if !devices.isEmpty {
