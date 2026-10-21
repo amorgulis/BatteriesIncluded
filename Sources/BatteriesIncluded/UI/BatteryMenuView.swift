@@ -38,7 +38,9 @@ struct BatteryMenuView: View {
             ProgressView("Reading batteries…")
         case .devices(let devices):
             ForEach(devices) { device in
-                DeviceRowView(device: device)
+                DeviceRowView(device: device, contentWidth: DeviceRowView.contentWidth(
+                    for: devices, otherTitles: ["Refresh", DebugMenuVisibility.exportTitle, "Quit"]
+                ))
             }
         case .noDevices:
             Label("No supported devices connected", systemImage: "wave.3.right")

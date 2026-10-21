@@ -53,8 +53,34 @@ extension DeviceBattery {
 struct DeviceRowView: View {
     let device: DeviceBattery
 
+    var contentWidth: CGFloat = 0
+
+    static func contentWidth(for devices: [DeviceBattery], otherTitles: [String] = []) -> CGFloat {
+        let nameWidth = devices.map { width(of: $0.name) }.max() ?? 0
+        let batteryWidth = devices.map { batteryWidth(for: $0) }.max() ?? 0
+        return max(nameWidth + 24 + batteryWidth, otherTitles.map { width(of: $0) }.max() ?? 0)
+    }
+
+    private static func width(of text: String) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width
+    }
+
+    private static func batteryWidth(for device: DeviceBattery) -> CGFloat {
+        device.menuBatteryParts.enumerated().reduce(0) { width, entry in
+            let (index, part) = entry
+            return width + (index > 0 ? Self.width(of: " · ") : 0)
+                + Self.width(of: part.text)
+                + (part.showsIcon ? Self.width(of: " ") + 23 : 0)
+        }
+    }
+
     private var title: Text {
-        var text = Text(verbatim: "\(device.name) — ")
+        let rowWidth = max(contentWidth, Self.contentWidth(for: [device]))
+        let gap = rowWidth - Self.width(of: device.name) - Self.batteryWidth(for: device)
+        // Native menus flatten stacks, so preserve the trailing column in the
+        // attributed title with a measured space between the name and status.
+        var text = Text(verbatim: device.name)
+            + Text(" ").kerning(gap - Self.width(of: " "))
         for (index, part) in device.menuBatteryParts.enumerated() {
             if index > 0 { text = text + Text(verbatim: " · ") }
             text = text + Text(verbatim: part.text)
